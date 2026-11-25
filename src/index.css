@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #080910;
+  --bg-secondary: #111426;
+  --bg-elevated: #161a32;
+  --accent-violet: #743bff;
+  --accent-blue: #258bff;
+  --accent-cyan: #27d9d0;
+  --text-primary: #ffffff;
+  --text-secondary: #a5a9bc;
+  --border-subtle: rgba(165, 169, 188, 0.14);
+  --border-glow: rgba(116, 59, 255, 0.42);
+  --font-heading: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  html {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-heading {
+    font-family: var(--font-heading);
+    letter-spacing: -0.02em;
+  }
+
+  /* High-contrast accessible keyboard focus ring (> 3:1 against #080910 and #111426) */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 3px;
+  }
+
+  /* Natural button interaction states */
+  :where(button):not(:disabled) {
+    cursor: pointer;
+    transition: box-shadow 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out;
+  }
+}
+
+/* Validate input only after user interaction (modern-web-guidance: validate-input-after-interaction) */
+.ts-input:is(:user-invalid, .user-invalid-fallback) {
+  border-color: #f43f5e !important;
+  background-color: rgba(244, 63, 94, 0.07) !important;
+}
+
+.ts-input + .ts-field-error {
+  display: none;
+}
+
+.ts-input:is(:user-invalid, .user-invalid-fallback) + .ts-field-error {
+  display: flex;
+}
+
+.ts-input:is(:user-valid, .user-valid-fallback):not(:placeholder-shown) {
+  border-color: rgba(39, 217, 208, 0.48);
+}
+
+/* Native dialog scroll containment without shifting root body scrollbar */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(8, 9, 16, 0.76);
+  backdrop-filter: blur(8px);
+}
+
+/* Horizontal snap scrollers */
+.ts-snap-scroller {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(116, 59, 255, 0.35) transparent;
+}
+.ts-snap-scroller > * {
+  scroll-snap-align: start;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #080910;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2342;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #743bff;
+}
+
+/* Surface utility classes */
+.ts-surface {
+  background: linear-gradient(180deg, rgba(21, 25, 48, 0.88) 0%, rgba(17, 20, 38, 0.94) 100%);
+  border: 1px solid rgba(165, 169, 188, 0.13);
+  box-shadow: 0 18px 45px -18px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.ts-surface-elevated {
+  background: linear-gradient(165deg, rgba(25, 30, 58, 0.95) 0%, rgba(17, 20, 38, 0.98) 100%);
+  border: 1px solid rgba(116, 59, 255, 0.28);
+  box-shadow: 0 24px 60px -15px rgba(8, 9, 16, 0.85), 0 0 28px -8px rgba(116, 59, 255, 0.22);
+}
+
+.ts-visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* Reduced motion opt-in for continuous spinners/pulses */
+.ts-spin {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: ts-rotate 0.9s linear infinite;
+  }
+}
+
+@keyframes ts-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
