@@ -224,9 +224,9 @@ void main() {
 
 function corridorHalfHeight(xNorm: number, stageH: number, isMobile: boolean): number {
   const ax = Math.abs(xNorm);
-  const flatZone = isMobile ? 0.28 : 0.165;
-  const minRatio = isMobile ? 0.22 : 0.195;
-  const maxRatio = isMobile ? 0.48 : 0.496;
+  const flatZone = isMobile ? 0.17 : 0.165;
+  const minRatio = isMobile ? 0.18 : 0.195;
+  const maxRatio = isMobile ? 0.46 : 0.496;
 
   if (ax <= flatZone) {
     return minRatio * stageH;
@@ -378,21 +378,20 @@ export function LandingView({ onNavigateAuth }: LandingViewProps) {
       const isMobile = vw < 640;
       const isTablet = vw >= 640 && vw < 1024;
 
-      // Mobile shows 3 generous side-by-side panels (left wing, center, right wing);
-      // Tablet shows 4–5; Desktop shows all 5 panels across the full width.
-      const halfSpan = isMobile ? 2.1 : isTablet ? 1.55 : 1.25;
+      // Fit all 5 side-by-side panels at once on phones too (smaller compact size on mobile only)
+      const halfSpan = isMobile ? 1.24 : isTablet ? 1.32 : 1.25;
       const fullSpan = halfSpan * 2;
-      const speed = isMobile ? 0.14 : BASE_SPEED;
+      const speed = isMobile ? 0.095 : BASE_SPEED;
 
       if (!prefersReducedMotion) {
         phase = (phase + speed * dt) % fullSpan;
       }
 
-      const stageH = isMobile ? Math.min(vh * 0.72, 540) : Math.max(470, vh * 0.85);
+      const stageH = isMobile ? Math.min(vh * 0.44, 330) : Math.max(470, vh * 0.85);
       const stageCy = vh * 0.5;
       const halfW = vw * 0.5;
-      const cardHalfNormW = isMobile ? 0.315 : isTablet ? 0.235 : 0.194;
-      const cornerR = isMobile ? 18.0 : 28.0;
+      const cardHalfNormW = isMobile ? 0.186 : isTablet ? 0.205 : 0.194;
+      const cornerR = isMobile ? 12.0 : 28.0;
 
       for (let i = 0; i < 6; i++) {
         texReadySmooth[i] += (texReadyTarget[i] - texReadySmooth[i]) * (1.0 - Math.exp(-9.0 * dt));
@@ -420,18 +419,20 @@ export function LandingView({ onNavigateAuth }: LandingViewProps) {
 
         const labelEl = labelRefs.current[i];
         if (labelEl) {
-          const minH = Math.min(hLeft, hRight);
-          const labelX = xLeftPx + (isMobile ? 10 : 20);
-          const labelY = stageCy + minH - (isMobile ? 46 : 56);
-          const distC = Math.abs(uCenter);
-          const innerFade = isMobile ? 0.34 : 0.25;
-          const outerCut = isMobile ? 0.92 : 0.98;
-          const vis =
-            distC < innerFade || distC > outerCut
-              ? 0
-              : Math.min(1, (distC - innerFade) / 0.12) * Math.min(1, (outerCut + 0.08 - distC) / 0.08);
-          labelEl.style.transform = `translate3d(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px, 0)`;
-          labelEl.style.opacity = (vis * texReadySmooth[i]).toFixed(3);
+          if (isMobile) {
+            labelEl.style.opacity = '0';
+          } else {
+            const minH = Math.min(hLeft, hRight);
+            const labelX = xLeftPx + 20;
+            const labelY = stageCy + minH - 56;
+            const distC = Math.abs(uCenter);
+            const vis =
+              distC < 0.25 || distC > 0.98
+                ? 0
+                : Math.min(1, (distC - 0.25) / 0.12) * Math.min(1, (1.06 - distC) / 0.08);
+            labelEl.style.transform = `translate3d(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px, 0)`;
+            labelEl.style.opacity = (vis * texReadySmooth[i]).toFixed(3);
+          }
         }
       }
 
@@ -545,9 +546,9 @@ export function LandingView({ onNavigateAuth }: LandingViewProps) {
             whileTap={{ scale: 0.97 }}
             transition={SPRINGS.micro}
             onClick={() => onNavigateAuth('signup')}
-            className="flex min-h-[44px] items-center justify-center rounded-[15px] bg-[#080910]/95 px-6 py-2.5 hover:bg-[#111426] sm:px-8 sm:py-3"
+            className="flex min-h-[38px] items-center justify-center rounded-[15px] bg-[#080910]/95 px-4 py-2 hover:bg-[#111426] sm:min-h-[44px] sm:px-8 sm:py-3"
           >
-            <span className="font-heading text-xs font-bold uppercase tracking-[0.18em] text-white sm:text-sm sm:tracking-[0.2em] lg:text-base">
+            <span className="font-heading text-[11px] font-bold uppercase tracking-[0.16em] text-white sm:text-sm sm:tracking-[0.2em] lg:text-base">
               GET STARTED
             </span>
           </motion.button>
