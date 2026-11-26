@@ -21,18 +21,25 @@ export function initializeDatabase({ dbPath, cryptoCtx, seedDemo = true }) {
   db.exec('PRAGMA journal_mode = DELETE;');
   db.exec('PRAGMA foreign_keys = ON;');
 
+  // If upgrading an existing legacy users table, add verification columns BEFORE running index creation
+  const existingUsersTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+    .get();
+  if (existingUsersTable) {
+    ensureColumn(db, 'users', 'email_lookup_hash', 'TEXT');
+    ensureColumn(db, 'users', 'mobile', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, 'users', 'mobile_lookup_hash', 'TEXT');
+    ensureColumn(db, 'users', 'declared_dob', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, 'users', 'verified_age_band', "TEXT NOT NULL DEFAULT 'UNVERIFIED'");
+    ensureColumn(db, 'users', 'account_status', "TEXT NOT NULL DEFAULT 'PENDING_VERIFICATION'");
+    ensureColumn(db, 'users', 'role', "TEXT NOT NULL DEFAULT 'student'");
+  }
+
   // Execute core verification & parental-consent schema migration
   const migrationSql = fs.readFileSync(MIGRATION_PATH, 'utf8');
   db.exec(migrationSql);
 
-  // Backfill columns safely if upgrading an older pre-verification teenstack.sqlite file
-  ensureColumn(db, 'users', 'email_lookup_hash', 'TEXT');
-  ensureColumn(db, 'users', 'mobile', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'users', 'mobile_lookup_hash', 'TEXT');
-  ensureColumn(db, 'users', 'declared_dob', "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, 'users', 'verified_age_band', "TEXT NOT NULL DEFAULT 'UNVERIFIED'");
-  ensureColumn(db, 'users', 'account_status', "TEXT NOT NULL DEFAULT 'PENDING_VERIFICATION'");
-  ensureColumn(db, 'users', 'role', "TEXT NOT NULL DEFAULT 'student'");
+  // Ensure TeenStack social/profile columns exist on fresh or upgraded databases
   ensureColumn(db, 'users', 'phone', "TEXT DEFAULT ''");
   ensureColumn(db, 'users', 'dob', "TEXT DEFAULT ''");
   ensureColumn(db, 'users', 'age', 'INTEGER DEFAULT 16');
