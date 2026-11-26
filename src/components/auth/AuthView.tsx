@@ -42,6 +42,7 @@ export function AuthView({
 
   // Sign Up state
   const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [dob, setDob] = useState('2009-09-15');
@@ -88,10 +89,16 @@ export function AuthView({
   const handleSignupSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    const cleanUsername = username.trim().replace(/^@+/, '').toLowerCase();
+    if (!/^[a-z0-9_.]{3,24}$/.test(cleanUsername)) {
+      setErrorMsg('Username must be 3–24 characters using letters, numbers, underscores (_), or dots (.).');
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await api.signup({
         fullName,
+        username: cleanUsername,
         email,
         phone,
         dob,
@@ -432,22 +439,57 @@ export function AuthView({
                   )}
 
                   <form onSubmit={handleSignupSubmit} className="space-y-3">
-                    <div>
-                      <label htmlFor="signup-name" className="mb-1 block text-xs font-medium text-white">
-                        Full Name
-                      </label>
-                      <input
-                        id="signup-name"
-                        name="name"
-                        type="text"
-                        required
-                        autoComplete="name"
-                        enterKeyHint="next"
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        placeholder="e.g. Jordan Rivera"
-                        className="ts-input min-h-[44px] w-full rounded-xl border border-white/14 bg-[#0B0E1D] px-3.5 py-2 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] sm:text-sm"
-                      />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="signup-name" className="mb-1 block text-xs font-medium text-white">
+                          Full Name
+                        </label>
+                        <input
+                          id="signup-name"
+                          name="name"
+                          type="text"
+                          required
+                          autoComplete="name"
+                          enterKeyHint="next"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          placeholder="e.g. Jordan Rivera"
+                          className="ts-input min-h-[44px] w-full rounded-xl border border-white/14 bg-[#0B0E1D] px-3.5 py-2 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] sm:text-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label htmlFor="signup-username" className="mb-1 block text-xs font-medium text-white">
+                          Username
+                        </label>
+                        <div className="relative">
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-sm font-semibold text-[#27D9D0]"
+                          >
+                            @
+                          </span>
+                          <input
+                            id="signup-username"
+                            name="username"
+                            type="text"
+                            required
+                            minLength={3}
+                            maxLength={24}
+                            spellCheck={false}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            autoComplete="username"
+                            enterKeyHint="next"
+                            value={username}
+                            onChange={(e) =>
+                              setUsername(e.target.value.replace(/^@+/, '').replace(/\s+/g, '_').toLowerCase())
+                            }
+                            placeholder="jordan_dev"
+                            className="ts-input min-h-[44px] w-full rounded-xl border border-white/14 bg-[#0B0E1D] py-2 pr-3.5 pl-8 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] sm:text-sm"
+                          />
+                        </div>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

@@ -518,7 +518,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/auth/signup' && method === 'POST') {
       const body = await readJsonBody(req);
-      const { fullName, email, phone, dob, age, password, marketingOptIn, acceptedTerms } = body;
+      const { fullName, username: requestedUsername, email, phone, dob, age, password, marketingOptIn, acceptedTerms } = body;
       if (!fullName || !email || !password) {
         return sendJson(res, 400, { error: 'Full name, email address, and password are required.' });
       }
@@ -545,13 +545,33 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const baseHandle =
-        String(fullName)
-          .toLowerCase()
-          .replace(/[^\p{L}\p{N}]+/gu, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 18) || 'student';
-      const username = `${baseHandle}_${Math.floor(100 + Math.random() * 900)}`;
+      const cleanRequested = String(requestedUsername || '')
+        .trim()
+        .replace(/^@+/, '')
+        .toLowerCase();
+      if (cleanRequested && !/^[a-z0-9_.]{3,24}$/.test(cleanRequested)) {
+        return sendJson(res, 400, {
+          error: 'Username must be 3–24 characters using letters, numbers, underscores, or dots.',
+        });
+      }
+
+      let username = cleanRequested;
+      if (!username) {
+        const baseHandle =
+          String(fullName)
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 18) || 'student';
+        username = `${baseHandle}_${Math.floor(100 + Math.random() * 900)}`;
+      } else {
+        const takenUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = ?').get(username);
+        if (takenUser) {
+          return sendJson(res, 409, {
+            error: 'That username is already taken. Please choose another.',
+          });
+        }
+      }
       const id = `usr-${randomBytes(8).toString('hex')}`;
 
       const initialProfile = {

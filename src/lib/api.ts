@@ -385,6 +385,7 @@ export const api = {
 
   async signup(payload: {
     fullName: string;
+    username: string;
     email: string;
     phone: string;
     dob: string;
@@ -406,21 +407,22 @@ export const api = {
       if (payload.password.length < 8) {
         throw new Error('Password must be at least 8 characters long.');
       }
+      const cleanUsername = payload.username.trim().replace(/^@+/, '').toLowerCase();
+      if (!/^[a-z0-9_.]{3,24}$/.test(cleanUsername)) {
+        throw new Error('Username must be 3–24 characters using letters, numbers, underscores, or dots.');
+      }
       const users = getStaticUsers();
       const cleanEmail = payload.email.trim().toLowerCase();
       if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
         throw new Error('An account with this email already exists. Switch to Log In instead.');
       }
-      const handleBase =
-        payload.fullName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 16) || 'student';
+      if (users.some((u) => u.username.toLowerCase() === cleanUsername)) {
+        throw new Error('That username is already taken. Please choose another.');
+      }
       const newUser: UserAccount & { passwordPlain?: string } = {
         id: `usr-${Date.now()}`,
         fullName: payload.fullName.trim(),
-        username: `${handleBase}_${Math.floor(100 + Math.random() * 900)}`,
+        username: cleanUsername,
         email: cleanEmail,
         phone: payload.phone ? payload.phone.replace(/.(?=.{4})/g, '•') : '',
         rawPhone: payload.phone,
