@@ -552,14 +552,20 @@ export function App() {
                 {route === 'profile' && (
                   <ProfileView
                     user={user}
+                    posts={posts}
+                    savedPostIds={savedPostIds}
                     inspectingPeer={inspectingPeer}
                     connectedIds={connectedIds}
                     onClearInspectingPeer={() => setInspectingPeer(null)}
+                    onSelectPeer={(peer) => setInspectingPeer(peer)}
                     onToggleConnect={handleToggleConnect}
-                    onMessagePeer={() => {
+                    onMessagePeer={(threadId) => {
+                      if (threadId) setActiveThreadId(threadId);
                       setMobileShowConversation(true);
                       navigate('chats');
                     }}
+                    onOpenPost={setExpandedPost}
+                    onNavigate={(sec) => navigate(sec)}
                     onSaveProfilePatch={async (patch, nextName) => {
                       const res = await api.saveOnboarding({
                         profilePatch: patch,

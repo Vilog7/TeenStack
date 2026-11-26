@@ -91,6 +91,87 @@ dialog::backdrop {
   scroll-snap-align: start;
 }
 
+/* Accessible single-row scrollable tablist with edge fades & forced-colors safe underline (modern-web-guidance: tabs) */
+@property --fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+.ts-profile-tablist {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 2.25rem;
+  scrollbar-width: none;
+  --fade-size: 2.25rem;
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
+  mask:
+    linear-gradient(black, black) no-clip subtract,
+    linear-gradient(to var(--fade-dir), black, transparent) var(--fade-start-pos) 0 / var(--fade-start) 100% no-repeat no-clip,
+    linear-gradient(to var(--fade-dir), transparent, black) var(--fade-end-pos) 0 / var(--fade-end) 100% no-repeat no-clip;
+  animation: ts-reveal-fade-start linear both, ts-hide-fade-end linear both;
+  animation-timeline: scroll(self inline);
+  animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  transition: --fade-start 0.2s, --fade-end 0.2s;
+}
+
+.ts-profile-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.ts-profile-tablist:dir(rtl) {
+  --fade-dir: left;
+  --fade-start-pos: 100%;
+  --fade-end-pos: 0;
+}
+
+.ts-profile-tablist.more-start {
+  --fade-start: var(--fade-size);
+}
+
+.ts-profile-tablist.more-end {
+  --fade-end: var(--fade-size);
+}
+
+@keyframes ts-reveal-fade-start {
+  to {
+    --fade-start: var(--fade-size);
+  }
+}
+
+@keyframes ts-hide-fade-end {
+  from {
+    --fade-end: var(--fade-size);
+  }
+}
+
+.ts-profile-tab {
+  position: relative;
+  flex: none;
+  scroll-snap-align: start;
+  color: var(--text-secondary);
+}
+
+.ts-profile-tab[aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+.ts-profile-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  border-block-end: 2.5px solid var(--accent-cyan);
+}
+
 /* Custom subtle scrollbars */
 ::-webkit-scrollbar {
   width: 7px;
