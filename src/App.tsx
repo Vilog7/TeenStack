@@ -145,12 +145,25 @@ export function App() {
     interactions: UserInteraction[],
     isNewSignup: boolean
   ) => {
-    setUser(authedUser);
     hydrateInteractions(interactions);
     await refreshContent();
-    if (isNewSignup || !authedUser.onboardingCompleted) {
+
+    if (isNewSignup) {
+      // Newly signed-up users MUST complete Setup -> Setup Profile before reaching Home
+      setUser(authedUser);
       navigate('onboarding');
     } else {
+      // Returning users logging in go DIRECTLY to the Home tab!
+      let readyUser = authedUser;
+      if (!authedUser.onboardingCompleted) {
+        try {
+          const saved = await api.saveOnboarding({ completed: true });
+          readyUser = saved.user;
+        } catch {
+          readyUser = { ...authedUser, onboardingCompleted: true };
+        }
+      }
+      setUser(readyUser);
       navigate('home');
     }
   };
@@ -280,17 +293,20 @@ export function App() {
     );
   }
 
+  const mustCompleteSetup = Boolean(user && !user.onboardingCompleted);
+
   const isAuthAppSection =
     user &&
+    !mustCompleteSetup &&
     ['home', 'posts', 'opportunities', 'chats', 'create', 'learn', 'profile'].includes(route);
 
   return (
     <MotionConfig reducedMotion="user">
       <div className="relative min-h-dvh bg-[#080910] text-white">
         {/* Continuous Morphing Background Orbs & Grid */}
-        <AmbientBackground route={route} paused={ambientPaused} />
+        <AmbientBackground route={mustCompleteSetup ? 'onboarding' : route} paused={ambientPaused} />
 
-        {/* Pre-Auth & Onboarding Views */}
+        {/* Pre-Auth & Required Setup / Setup Profile Views */}
         {!isAuthAppSection ? (
           route === 'login' || route === 'signup' ? (
             <AuthView
@@ -299,17 +315,13 @@ export function App() {
               onBackToLanding={() => navigate('landing')}
               onAuthenticated={handleAuthenticated}
             />
-          ) : route === 'onboarding' && user ? (
+          ) : (route === 'onboarding' || mustCompleteSetup) && user ? (
             <OnboardingView
               user={user}
               onUpdateUser={setUser}
-              onFinishToProfile={(updated) => {
+              onFinishToHome={(updated) => {
                 setUser(updated);
                 setInspectingPeer(null);
-                navigate('profile');
-              }}
-              onSaveAndExitToHome={(updated) => {
-                setUser(updated);
                 navigate('home');
               }}
             />
