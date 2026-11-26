@@ -3,9 +3,20 @@ import type {
   UserAccount,
   UserInteraction,
   ChatMessage,
+  ChatThread,
+  PeerStudent,
+  OpportunityItem,
+  CourseItem,
   StudentVerificationOverview,
   ParentPortalState,
 } from '../types';
+import {
+  PEER_STUDENTS,
+  OPPORTUNITIES,
+  COURSES,
+  CHAT_THREADS,
+  INITIAL_NOTIFICATIONS,
+} from '../data/catalog';
 
 const TOKEN_KEY = 'teenstack_auth_token';
 const PARENT_SESSION_KEY = 'teenstack_parent_portal_token';
@@ -1218,6 +1229,309 @@ export const api = {
       return await request('/api/privacy/delete-account', { method: 'POST', body: '{}' });
     } catch {
       return { ok: true };
+    }
+  },
+
+  // ===========================================================================
+  // FULL PLATFORM DOMAIN ENDPOINTS (Bootstrap, Network, Chats, Opps, Courses, Search)
+  // ===========================================================================
+  async checkUsername(username: string): Promise<{
+    available: boolean;
+    username: string;
+    reason: string;
+  }> {
+    try {
+      return await request(`/api/auth/check-username?username=${encodeURIComponent(username)}`);
+    } catch {
+      const clean = username.trim().replace(/^@+/, '').toLowerCase();
+      const taken = getStaticUsers().some((u) => u.username.toLowerCase() === clean);
+      return {
+        available: !taken && /^[a-z0-9_.]{3,24}$/.test(clean),
+        username: clean,
+        reason: taken ? 'Username is already taken.' : 'Available',
+      };
+    }
+  },
+
+  async requestPasswordReset(email: string): Promise<{ queued: boolean; devResetToken?: string }> {
+    try {
+      return await request('/api/auth/password-reset/request', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+    } catch {
+      return { queued: true };
+    }
+  },
+
+  async confirmPasswordReset(payload: { resetToken: string; newPassword: string }) {
+    return request<{ ok: boolean }>('/api/auth/password-reset/confirm', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getBootstrap(): Promise<{
+    posts: FeedPost[];
+    threads: ChatThread[];
+    unreadChatsCount: number;
+    messages: ChatMessage[];
+    peers: PeerStudent[];
+    friendIds: string[];
+    opportunities: OpportunityItem[];
+    courses: CourseItem[];
+    completedModuleKeys: string[];
+    notifications: any[];
+    interactions: UserInteraction[];
+  }> {
+    try {
+      return await request('/api/bootstrap');
+    } catch {
+      const uid = localStorage.getItem(STATIC_CURRENT_USER_ID_KEY) || DEFAULT_DEMO_USER.id;
+      const interactions = loadJson<UserInteraction[]>(`${STATIC_INTERACTIONS_KEY}_${uid}`, []);
+      const friendIds = [
+        'peer-maya',
+        ...interactions.filter((i) => i.target_type === 'connect').map((i) => i.target_id),
+      ];
+      return {
+        posts: getStaticPosts(),
+        threads: CHAT_THREADS,
+        unreadChatsCount: CHAT_THREADS.reduce((s, t) => s + t.unread, 0),
+        messages: getStaticMessages(),
+        peers: PEER_STUDENTS,
+        friendIds: Array.from(new Set(friendIds)),
+        opportunities: OPPORTUNITIES,
+        courses: COURSES,
+        completedModuleKeys: [
+          'course-1:m1',
+          'course-1:m2',
+          'course-2:m1',
+          ...interactions
+            .filter((i) => i.target_type === 'course_module')
+            .map((i) => i.target_id),
+        ],
+        notifications: INITIAL_NOTIFICATIONS,
+        interactions,
+      };
+    }
+  },
+
+  async addProject(payload: {
+    title: string;
+    summary: string;
+    link: string;
+    tag: string;
+  }): Promise<{ user: UserAccount }> {
+    try {
+      return await request('/api/profile/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      const me = await this.me();
+      const prev = me.user?.profile.portfolioProjects || [];
+      return this.saveOnboarding({
+        profilePatch: {
+          portfolioProjects: [
+            { id: `proj-${Date.now()}`, ...payload },
+            ...prev,
+          ],
+          projectsCompleted: prev.length + 1,
+        },
+      });
+    }
+  },
+
+  async deleteProject(projectId: string): Promise<{ user: UserAccount }> {
+    try {
+      return await request(`/api/profile/projects/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      const me = await this.me();
+      const next = (me.user?.profile.portfolioProjects || []).filter((p) => p.id !== projectId);
+      return this.saveOnboarding({
+        profilePatch: { portfolioProjects: next, projectsCompleted: next.length },
+      });
+    }
+  },
+
+  async addAchievement(payload: { title: string; issuer?: string }): Promise<{ user: UserAccount }> {
+    try {
+      return await request('/api/profile/achievements', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      const me = await this.me();
+      const prev = me.user?.profile.achievements || [];
+      return this.saveOnboarding({
+        profilePatch: { achievements: [payload.title, ...prev] },
+      });
+    }
+  },
+
+  async sharePost(postId: string): Promise<{ sharesCount?: number }> {
+    try {
+      return await request(`/api/posts/${encodeURIComponent(postId)}/share`, {
+        method: 'POST',
+        body: '{}',
+      });
+    } catch {
+      return {};
+    }
+  },
+
+  async recordStoryView(storyId: string) {
+    try {
+      return await request(`/api/stories/${encodeURIComponent(storyId)}/view`, {
+        method: 'POST',
+        body: '{}',
+      });
+    } catch {
+      return { ok: true };
+    }
+  },
+
+  async openDirectThread(peerId: string): Promise<{
+    threadId: string;
+    threads: ChatThread[];
+    totalUnread: number;
+  }> {
+    try {
+      return await request('/api/chats/threads/direct', {
+        method: 'POST',
+        body: JSON.stringify({ peerId }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const firstName = peerId.replace(/^peer-/, '').toLowerCase();
+      const matched = CHAT_THREADS.find((t) => t.id.includes(firstName)) || CHAT_THREADS[0];
+      return { threadId: matched.id, threads: CHAT_THREADS, totalUnread: 0 };
+    }
+  },
+
+  async markThreadRead(threadId: string): Promise<{
+    threads: ChatThread[];
+    totalUnread: number;
+  }> {
+    try {
+      return await request(`/api/chats/threads/${encodeURIComponent(threadId)}/read`, {
+        method: 'POST',
+        body: '{}',
+      });
+    } catch {
+      return { threads: CHAT_THREADS, totalUnread: 0 };
+    }
+  },
+
+  async applyToOpportunity(
+    opportunityId: string,
+    pitchNote: string
+  ): Promise<{ applicationId: string }> {
+    try {
+      return await request(`/api/opportunities/${encodeURIComponent(opportunityId)}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ pitchNote }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      await this.toggleInteraction('opportunity_apply', opportunityId, { pitchNote });
+      return { applicationId: `app-static-${Date.now()}` };
+    }
+  },
+
+  async createOpportunity(payload: {
+    title: string;
+    organization?: string;
+    type: OpportunityItem['type'];
+    deadline: string;
+    mode: OpportunityItem['Mode'];
+    reward: string;
+    skills: string[];
+    description: string;
+  }): Promise<{ opportunity: OpportunityItem }> {
+    try {
+      return await request('/api/opportunities', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      return {
+        opportunity: {
+          id: `opp-${Date.now()}`,
+          title: payload.title,
+          organization: payload.organization || 'Student Initiative',
+          type: payload.type,
+          deadline: payload.deadline,
+          Mode: payload.mode,
+          reward: payload.reward,
+          ageRange: 'Ages 13–19',
+          skills: payload.skills,
+          description: payload.description,
+        },
+      };
+    }
+  },
+
+  async toggleCourseModule(
+    courseId: string,
+    moduleCode: string
+  ): Promise<{
+    completed: boolean;
+    certificateAwarded: boolean;
+    courses: CourseItem[];
+    completedModuleKeys: string[];
+    user?: UserAccount;
+  }> {
+    try {
+      return await request(
+        `/api/courses/${encodeURIComponent(courseId)}/modules/${encodeURIComponent(moduleCode)}/toggle`,
+        {
+          method: 'POST',
+          body: '{}',
+        }
+      );
+    } catch {
+      const key = `${courseId}:${moduleCode}`;
+      const res = await this.toggleInteraction('course_module', key);
+      return {
+        completed: res.active,
+        certificateAwarded: false,
+        courses: COURSES,
+        completedModuleKeys: res.interactions
+          .filter((i) => i.target_type === 'course_module')
+          .map((i) => i.target_id),
+      };
+    }
+  },
+
+  async searchAll(query: string): Promise<{
+    students: PeerStudent[];
+    posts: FeedPost[];
+    opportunities: OpportunityItem[];
+    courses: CourseItem[];
+  }> {
+    try {
+      return await request(`/api/search?q=${encodeURIComponent(query)}`);
+    } catch {
+      const q = query.trim().toLowerCase();
+      return {
+        students: PEER_STUDENTS.filter(
+          (s) =>
+            !q ||
+            s.name.toLowerCase().includes(q) ||
+            s.skills.some((sk) => sk.toLowerCase().includes(q))
+        ).slice(0, 4),
+        posts: getStaticPosts()
+          .filter((p) => !q || p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q))
+          .slice(0, 4),
+        opportunities: OPPORTUNITIES.filter(
+          (o) => !q || o.title.toLowerCase().includes(q) || o.type.toLowerCase().includes(q)
+        ).slice(0, 3),
+        courses: COURSES.filter((c) => !q || c.title.toLowerCase().includes(q)).slice(0, 3),
+      };
     }
   },
 };

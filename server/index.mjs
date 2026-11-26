@@ -18,6 +18,7 @@ import {
   createVerificationEngine,
   CURRENT_CONSENT_VERSION,
 } from './verification_engine.mjs';
+import { createPlatformDomainServices } from './platform_domains.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,6 +89,7 @@ export function createTeenStackServer({
   const db = initializeDatabase({ dbPath, cryptoCtx, seedDemo });
   const signzyService = createSignzyAgeVerificationService(env);
   const engine = createVerificationEngine({ db, cryptoCtx, signzyService });
+  const domains = createPlatformDomainServices({ db, cryptoCtx, engine });
   const limiter = new RateLimiter();
 
   function sendJson(res, status, data, extraHeaders = {}) {
@@ -906,8 +908,40 @@ export function createTeenStackServer({
       }
 
       // =========================================================================
-      // 5. GATED TEENSTACK SOCIAL & LEARNING ENDPOINTS (REQUIRE ACTIVE STATUS!)
+      // 1B. USERNAME AVAILABILITY & PASSWORD RESET ENDPOINTS
       // =========================================================================
+      if (pathname === '/api/auth/check-username' && method === 'GET') {
+        const q = urlObj.searchParams.get('username') || '';
+        return sendJson(res, 200, domains.checkUsernameAvailability(q));
+      }
+
+      if (pathname === '/api/auth/password-reset/request' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'pwd_reset_req', 5, 60_000)) return;
+        const body = await readJsonBody(req);
+        const resetRes = domains.requestPasswordReset(body.email);
+        return sendJson(res, 200, resetRes);
+      }
+
+      if (pathname === '/api/auth/password-reset/confirm' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'pwd_reset_confirm', 5, 60_000)) return;
+        const body = await readJsonBody(req);
+        const done = domains.confirmPasswordReset({
+          resetToken: body.resetToken,
+          newPassword: body.newPassword,
+        });
+        return sendJson(res, 200, done);
+      }
+
+      // =========================================================================
+      // 5. GATED TEENSTACK FULL PLATFORM ENDPOINTS (REQUIRE ACTIVE STATUS!)
+      // =========================================================================
+      if (pathname === '/api/bootstrap' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const bundle = domains.getAuthenticatedBootstrap(auth.user);
+        return sendJson(res, 200, { user: auth.user, ...bundle });
+      }
+
       if (pathname === '/api/onboarding' && method === 'PUT') {
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
@@ -946,114 +980,168 @@ export function createTeenStackServer({
         return sendJson(res, 200, { user: sanitizeUser(updated) });
       }
 
+      // --- Profile Projects & Achievements CRUD ---
+      if (pathname === '/api/profile/projects' && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const project = domains.addStudentProject({
+          userId: auth.user.id,
+          title: body.title,
+          summary: body.summary,
+          link: body.link,
+          tag: body.tag,
+        });
+        const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id);
+        return sendJson(res, 201, { project, user: sanitizeUser(updated) });
+      }
+
+      const projDeleteMatch = pathname.match(/^\/api\/profile\/projects\/([^/]+)$/);
+      if (projDeleteMatch && method === 'DELETE') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        domains.deleteStudentProject({
+          userId: auth.user.id,
+          projectId: decodeURIComponent(projDeleteMatch[1]),
+        });
+        const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id);
+        return sendJson(res, 200, { user: sanitizeUser(updated) });
+      }
+
+      if (pathname === '/api/profile/achievements' && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const achievement = domains.addStudentAchievement({
+          userId: auth.user.id,
+          title: body.title,
+          issuer: body.issuer,
+        });
+        const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id);
+        return sendJson(res, 201, { achievement, user: sanitizeUser(updated) });
+      }
+
+      const achDeleteMatch = pathname.match(/^\/api\/profile\/achievements\/([^/]+)$/);
+      if (achDeleteMatch && method === 'DELETE') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        domains.deleteStudentAchievement({
+          userId: auth.user.id,
+          achievementId: decodeURIComponent(achDeleteMatch[1]),
+        });
+        const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id);
+        return sendJson(res, 200, { user: sanitizeUser(updated) });
+      }
+
+      // --- Social Network: Peers, Friends, Mutuals & Profile Bundle ---
+      if (pathname === '/api/network/peers' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, { peers: domains.listPeersForUser(auth.user.id) });
+      }
+
+      if (pathname === '/api/network/connect' && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const result = domains.toggleFriendship({
+          viewerRow: auth.row,
+          targetPeerId: body.peerId,
+        });
+        return sendJson(res, 200, {
+          ...result,
+          peers: domains.listPeersForUser(auth.user.id),
+        });
+      }
+
+      const profileBundleMatch = pathname.match(/^\/api\/network\/profile\/([^/]+)$/);
+      if (profileBundleMatch && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const bundle = domains.getFullProfileBundle({
+          viewerId: auth.user.id,
+          identifier: decodeURIComponent(profileBundleMatch[1]),
+        });
+        return sendJson(res, 200, bundle);
+      }
+
+      // --- Feed, Posts, Reels, 24h Stories, Comments & Shares ---
       if (pathname === '/api/posts' && method === 'GET') {
-        const rows = db.prepare('SELECT * FROM posts ORDER BY datetime(created_at) DESC').all();
-        const posts = rows.map((r) => ({
-          id: r.id,
-          authorId: r.author_id,
-          authorName: r.author_name,
-          authorHandle: r.author_handle,
-          authorSchool: r.author_school,
-          authorAvatar: r.author_avatar,
-          category: r.category,
-          title: r.title,
-          content: r.content,
-          mediaType: r.media_type,
-          mediaMeta: JSON.parse(r.media_meta || '{}'),
-          skillTags: JSON.parse(r.skill_tags || '[]'),
-          likesCount: r.likes_count,
-          comments: JSON.parse(r.comments_json || '[]'),
-          sharesCount: r.shares_count,
-          createdAt: r.created_at,
-        }));
+        const auth = getAuthUser(req);
+        const viewerId = auth?.row?.account_status === 'ACTIVE' ? auth.user.id : null;
+        const posts = domains.listFeedPosts({
+          viewerId,
+          category: urlObj.searchParams.get('category'),
+          skill: urlObj.searchParams.get('skill'),
+          authorId: urlObj.searchParams.get('authorId'),
+          savedOnly: urlObj.searchParams.get('savedOnly') === 'true',
+          includeStories: urlObj.searchParams.get('excludeStories') !== 'true',
+        });
         return sendJson(res, 200, { posts });
       }
 
       if (pathname === '/api/posts' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'create_post', 15, 60_000)) return;
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
         const body = await readJsonBody(req);
-        const { category, title, content, mediaType, mediaMeta, skillTags } = body;
-        if (!content || !String(content).trim()) {
-          return sendJson(res, 400, { error: 'Content cannot be empty.' });
-        }
-
-        const id = `post-${randomBytes(6).toString('hex')}`;
-        const schoolBadge = auth.user.profile.school
-          ? `${auth.user.profile.school} · ${auth.user.age}`
-          : `${auth.user.profile.educationLevel || 'TeenStack Builder'} · ${auth.user.age}`;
-
-        db.prepare(`
-          INSERT INTO posts (id, author_id, author_name, author_handle, author_school, author_avatar, category, title, content, media_type, media_meta, skill_tags, likes_count, comments_json, shares_count, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', 0, ?)
-        `).run(
-          id,
-          auth.user.id,
-          auth.user.fullName,
-          `@${auth.user.username}`,
-          schoolBadge,
-          auth.user.profile.avatarUrl || auth.user.profile.avatarPreset || 'violet-coder',
-          category || 'post',
-          String(title || '').trim(),
-          String(content).trim(),
-          mediaType || 'none',
-          JSON.stringify(mediaMeta || {}),
-          JSON.stringify(Array.isArray(skillTags) ? skillTags : []),
-          new Date().toISOString()
-        );
-
-        const r = db.prepare('SELECT * FROM posts WHERE id = ?').get(id);
-        return sendJson(res, 201, {
-          post: {
-            id: r.id,
-            authorId: r.author_id,
-            authorName: r.author_name,
-            authorHandle: r.author_handle,
-            authorSchool: r.author_school,
-            authorAvatar: r.author_avatar,
-            category: r.category,
-            title: r.title,
-            content: r.content,
-            mediaType: r.media_type,
-            mediaMeta: JSON.parse(r.media_meta || '{}'),
-            skillTags: JSON.parse(r.skill_tags || '[]'),
-            likesCount: r.likes_count,
-            comments: [],
-            sharesCount: r.shares_count,
-            createdAt: r.created_at,
-          },
+        const post = domains.createPostWithRules({
+          authorUser: auth.user,
+          category: body.category,
+          title: body.title,
+          content: body.content,
+          mediaType: body.mediaType,
+          mediaMeta: body.mediaMeta,
+          skillTags: body.skillTags,
         });
+        return sendJson(res, 201, { post });
+      }
+
+      const postItemMatch = pathname.match(/^\/api\/posts\/([^/]+)$/);
+      if (postItemMatch && method === 'DELETE') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const result = domains.deletePost({
+          userId: auth.user.id,
+          postId: decodeURIComponent(postItemMatch[1]),
+        });
+        return sendJson(res, 200, result);
       }
 
       const commentMatch = pathname.match(/^\/api\/posts\/([^/]+)\/comment$/);
       if (commentMatch && method === 'POST') {
+        if (!checkRateLimit(req, res, 'comment_post', 20, 60_000)) return;
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
         const body = await readJsonBody(req);
-        const { text } = body;
-        if (!text || !String(text).trim()) {
-          return sendJson(res, 400, { error: 'Comment text required' });
-        }
-
-        const postId = decodeURIComponent(commentMatch[1]);
-        const row = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
-        if (!row) return sendJson(res, 404, { error: 'Post not found' });
-
-        const comments = JSON.parse(row.comments_json || '[]');
-        comments.push({
-          id: `c-${randomBytes(4).toString('hex')}`,
-          author: auth.user.fullName,
-          avatar: auth.user.profile.avatarUrl || auth.user.profile.avatarPreset || 'violet-coder',
-          text: String(text).trim(),
-          time: 'Just now',
+        const comments = domains.addCommentToPost({
+          authorUser: auth.user,
+          postId: decodeURIComponent(commentMatch[1]),
+          text: body.text,
         });
-        db.prepare('UPDATE posts SET comments_json = ? WHERE id = ?').run(
-          JSON.stringify(comments),
-          postId
-        );
         return sendJson(res, 200, { comments });
       }
 
+      const shareMatch = pathname.match(/^\/api\/posts\/([^/]+)\/share$/);
+      if (shareMatch && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const shareRes = domains.recordPostShare(decodeURIComponent(shareMatch[1]));
+        return sendJson(res, 200, shareRes);
+      }
+
+      const storyViewMatch = pathname.match(/^\/api\/stories\/([^/]+)\/view$/);
+      if (storyViewMatch && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const viewRes = domains.recordStoryView({
+          viewerId: auth.user.id,
+          storyId: decodeURIComponent(storyViewMatch[1]),
+        });
+        return sendJson(res, 200, viewRes);
+      }
+
+      // --- Unified Interactions Toggle (Likes, Saves, Connects, Course/Opp sync) ---
       if (pathname === '/api/interactions/toggle' && method === 'POST') {
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
@@ -1061,6 +1149,34 @@ export function createTeenStackServer({
         const { targetType, targetId, meta } = body;
         if (!targetType || !targetId) {
           return sendJson(res, 400, { error: 'Invalid interaction target' });
+        }
+
+        if (targetType === 'connect') {
+          const fRes = domains.toggleFriendship({
+            viewerRow: auth.row,
+            targetPeerId: targetId,
+          });
+          const interactions = db
+            .prepare('SELECT target_type, target_id, meta_json FROM user_interactions WHERE user_id = ?')
+            .all(auth.user.id);
+          return sendJson(res, 200, { active: fRes.connected, interactions });
+        }
+
+        if (targetType === 'course_module' && String(targetId).includes(':')) {
+          const [cId, mCode] = String(targetId).split(':');
+          const cRes = domains.toggleCourseModuleProgress({
+            user: auth.user,
+            courseId: cId,
+            moduleCode: mCode,
+          });
+          const interactions = db
+            .prepare('SELECT target_type, target_id, meta_json FROM user_interactions WHERE user_id = ?')
+            .all(auth.user.id);
+          return sendJson(res, 200, {
+            active: cRes.completed,
+            certificateAwarded: cRes.certificateAwarded,
+            interactions,
+          });
         }
 
         const existing = db
@@ -1095,10 +1211,50 @@ export function createTeenStackServer({
         return sendJson(res, 200, { active, interactions });
       }
 
+      // --- Chats, Threads, Read Receipts & Messages ---
+      if (pathname === '/api/chats/threads' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, domains.listThreadsForUser(auth.user.id));
+      }
+
+      if (pathname === '/api/chats/threads/direct' && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const directRes = domains.openDirectThreadWithPrivacyCheck({
+          senderRow: auth.row,
+          targetPeerId: body.peerId,
+        });
+        return sendJson(res, 200, {
+          ...directRes,
+          ...domains.listThreadsForUser(auth.user.id),
+        });
+      }
+
+      const threadReadMatch = pathname.match(/^\/api\/chats\/threads\/([^/]+)\/read$/);
+      if (threadReadMatch && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(
+          res,
+          200,
+          domains.markThreadRead({
+            userId: auth.user.id,
+            threadId: decodeURIComponent(threadReadMatch[1]),
+          })
+        );
+      }
+
       if (pathname === '/api/messages' && method === 'GET') {
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
-        const rows = db.prepare('SELECT * FROM messages ORDER BY datetime(created_at) ASC').all();
+        const threadFilter = urlObj.searchParams.get('threadId');
+        const rows = threadFilter
+          ? db
+              .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY datetime(created_at) ASC')
+              .all(threadFilter)
+          : db.prepare('SELECT * FROM messages ORDER BY datetime(created_at) ASC').all();
         return sendJson(res, 200, {
           messages: rows.map((m) => ({
             id: m.id,
@@ -1112,30 +1268,108 @@ export function createTeenStackServer({
       }
 
       if (pathname === '/api/messages' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'send_message', 30, 60_000)) return;
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
         const body = await readJsonBody(req);
-        const { threadId, text } = body;
-        if (!threadId || !text || !String(text).trim()) {
+        if (!body.threadId || !body.text || !String(body.text).trim()) {
           return sendJson(res, 400, { error: 'Message text required' });
         }
-        const cleanText = String(text).trim();
-        const id = `msg-${randomBytes(6).toString('hex')}`;
-        const createdAt = new Date().toISOString();
-        db.prepare(
-          'INSERT INTO messages (id, thread_id, sender_id, sender_name, text, attachment_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(id, threadId, auth.user.id, auth.user.fullName, cleanText, 'null', createdAt);
-
-        return sendJson(res, 201, {
-          message: {
-            id,
-            threadId,
-            senderId: auth.user.id,
-            senderName: auth.user.fullName,
-            text: cleanText,
-            createdAt,
-          },
+        const message = domains.sendChatMessageWithSafety({
+          senderUser: auth.user,
+          threadId: body.threadId,
+          text: body.text,
         });
+        return sendJson(res, 201, { message });
+      }
+
+      // --- Opportunities, Hackathons & Student Bounties ---
+      if (pathname === '/api/opportunities' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const opportunities = domains.listOpportunities({
+          userId: auth.user.id,
+          typeFilter: urlObj.searchParams.get('type'),
+        });
+        return sendJson(res, 200, { opportunities });
+      }
+
+      if (pathname === '/api/opportunities' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'create_opp', 6, 60_000)) return;
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const opportunity = domains.createOpportunityBounty({
+          creatorUser: auth.user,
+          title: body.title,
+          organization: body.organization,
+          type: body.type,
+          deadline: body.deadline,
+          mode: body.mode,
+          reward: body.reward,
+          skills: body.skills,
+          description: body.description,
+        });
+        return sendJson(res, 201, { opportunity });
+      }
+
+      const oppApplyMatch = pathname.match(/^\/api\/opportunities\/([^/]+)\/apply$/);
+      if (oppApplyMatch && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const appRes = domains.applyToOpportunity({
+          user: auth.user,
+          opportunityId: decodeURIComponent(oppApplyMatch[1]),
+          pitchNote: body.pitchNote,
+        });
+        return sendJson(res, 201, appRes);
+      }
+
+      // --- Learning Courses & Module Progress ---
+      if (pathname === '/api/courses' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, domains.listCoursesWithProgress(auth.user.id));
+      }
+
+      const modToggleMatch = pathname.match(/^\/api\/courses\/([^/]+)\/modules\/([^/]+)\/toggle$/);
+      if (modToggleMatch && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const toggled = domains.toggleCourseModuleProgress({
+          user: auth.user,
+          courseId: decodeURIComponent(modToggleMatch[1]),
+          moduleCode: decodeURIComponent(modToggleMatch[2]),
+        });
+        const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(auth.user.id);
+        return sendJson(res, 200, {
+          ...toggled,
+          user: sanitizeUser(updatedUser),
+        });
+      }
+
+      // --- Notifications & Unified Global Search ---
+      if (pathname === '/api/notifications' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, { notifications: domains.listNotifications(auth.user.id) });
+      }
+
+      if (pathname === '/api/notifications/read-all' && method === 'POST') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, { notifications: domains.markNotificationsRead(auth.user.id) });
+      }
+
+      if (pathname === '/api/search' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const results = domains.executeGlobalSearch({
+          viewerId: auth.user.id,
+          query: urlObj.searchParams.get('q') || '',
+        });
+        return sendJson(res, 200, results);
       }
 
       // Serve static production frontend from dist/
@@ -1185,7 +1419,7 @@ export function createTeenStackServer({
     }
   });
 
-  return { server, db, cryptoCtx, signzyService, engine };
+  return { server, db, cryptoCtx, signzyService, engine, domains };
 }
 
 // Start server automatically when invoked directly via `node server/index.mjs`

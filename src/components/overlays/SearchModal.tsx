@@ -3,11 +3,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search, X, ArrowUpRight, User, Trophy, GraduationCap, FileText } from 'lucide-react';
 import { PEER_STUDENTS, OPPORTUNITIES, COURSES } from '../../data/catalog';
 import { SPRINGS } from '../../lib/tokens';
-import type { FeedPost, NavSection, PeerStudent } from '../../types';
+import { api } from '../../lib/api';
+import type { CourseItem, FeedPost, NavSection, OpportunityItem, PeerStudent } from '../../types';
 
 interface SearchModalProps {
   open: boolean;
   posts: FeedPost[];
+  peers?: PeerStudent[];
+  opportunities?: OpportunityItem[];
+  courses?: CourseItem[];
   onClose: () => void;
   onNavigate: (section: NavSection) => void;
   onSelectPeer: (peer: PeerStudent) => void;
@@ -17,12 +21,21 @@ interface SearchModalProps {
 export function SearchModal({
   open,
   posts,
+  peers = PEER_STUDENTS,
+  opportunities = OPPORTUNITIES,
+  courses = COURSES,
   onClose,
   onNavigate,
   onSelectPeer,
   onOpenPost,
 }: SearchModalProps) {
   const [query, setQuery] = useState('');
+  const [remoteResults, setRemoteResults] = useState<{
+    students: PeerStudent[];
+    posts: FeedPost[];
+    opportunities: OpportunityItem[];
+    courses: CourseItem[];
+  } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -33,36 +46,62 @@ export function SearchModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => {
+      api
+        .searchAll(query)
+        .then((res) => setRemoteResults(res))
+        .catch(() => setRemoteResults(null));
+    }, 140);
+    return () => clearTimeout(timer);
+  }, [open, query]);
+
   const q = query.trim().toLowerCase();
 
-  const matchedStudents = PEER_STUDENTS.filter(
-    (s) =>
-      !q ||
-      s.name.toLowerCase().includes(q) ||
-      s.skills.some((sk) => sk.toLowerCase().includes(q)) ||
-      s.school.toLowerCase().includes(q)
+  const matchedStudents = (
+    remoteResults
+      ? remoteResults.students
+      : peers.filter(
+          (s) =>
+            !q ||
+            s.name.toLowerCase().includes(q) ||
+            s.skills.some((sk) => sk.toLowerCase().includes(q)) ||
+            s.school.toLowerCase().includes(q)
+        )
   ).slice(0, 3);
 
-  const matchedPosts = posts
-    .filter(
-      (p) =>
-        !q ||
-        p.title.toLowerCase().includes(q) ||
-        p.content.toLowerCase().includes(q) ||
-        p.skillTags.some((t) => t.toLowerCase().includes(q))
-    )
-    .slice(0, 3);
+  const matchedPosts = (
+    remoteResults
+      ? remoteResults.posts
+      : posts.filter(
+          (p) =>
+            !q ||
+            p.title.toLowerCase().includes(q) ||
+            p.content.toLowerCase().includes(q) ||
+            p.skillTags.some((t) => t.toLowerCase().includes(q))
+        )
+  ).slice(0, 3);
 
-  const matchedOpps = OPPORTUNITIES.filter(
-    (o) =>
-      !q ||
-      o.title.toLowerCase().includes(q) ||
-      o.type.toLowerCase().includes(q) ||
-      o.skills.some((sk) => sk.toLowerCase().includes(q))
+  const matchedOpps = (
+    remoteResults
+      ? remoteResults.opportunities
+      : opportunities.filter(
+          (o) =>
+            !q ||
+            o.title.toLowerCase().includes(q) ||
+            o.type.toLowerCase().includes(q) ||
+            o.skills.some((sk) => sk.toLowerCase().includes(q))
+        )
   ).slice(0, 2);
 
-  const matchedCourses = COURSES.filter(
-    (c) => !q || c.title.toLowerCase().includes(q) || c.skills.some((s) => s.toLowerCase().includes(q))
+  const matchedCourses = (
+    remoteResults
+      ? remoteResults.courses
+      : courses.filter(
+          (c) =>
+            !q || c.title.toLowerCase().includes(q) || c.skills.some((s) => s.toLowerCase().includes(q))
+        )
   ).slice(0, 2);
 
   return (

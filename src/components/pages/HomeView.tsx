@@ -5,11 +5,21 @@ import { StudentAvatar } from '../ui/StudentAvatar';
 import { PostCard } from '../feed/PostCard';
 import { PEER_STUDENTS, OPPORTUNITIES } from '../../data/catalog';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
-import type { ChatMessage, FeedPost, NavSection, PeerStudent, UserAccount } from '../../types';
+import { api } from '../../lib/api';
+import type {
+  ChatMessage,
+  FeedPost,
+  NavSection,
+  OpportunityItem,
+  PeerStudent,
+  UserAccount,
+} from '../../types';
 
 interface HomeViewProps {
   user: UserAccount;
   posts: FeedPost[];
+  peers?: PeerStudent[];
+  opportunities?: OpportunityItem[];
   messages?: ChatMessage[];
   likedPostIds: Set<string>;
   savedPostIds: Set<string>;
@@ -38,6 +48,8 @@ const STORY_IMAGES: Record<string, string> = {
 export function HomeView({
   user,
   posts,
+  peers = PEER_STUDENTS,
+  opportunities = OPPORTUNITIES,
   likedPostIds,
   savedPostIds,
   connectedIds,
@@ -55,6 +67,9 @@ export function HomeView({
   const [activeStoryPeer, setActiveStoryPeer] = useState<PeerStudent | null>(null);
   const [viewingMyStoryIdx, setViewingMyStoryIdx] = useState<number | null>(null);
   const [seenStories, setSeenStories] = useState<Set<string>>(new Set());
+
+  const peerList = peers.length > 0 ? peers : PEER_STUDENTS;
+  const oppList = opportunities.length > 0 ? opportunities : OPPORTUNITIES;
 
   const myStories = posts.filter((p) => p.category === 'story' && p.authorId === user.id);
   const feedPosts = posts.filter((p) => p.category !== 'story');
@@ -101,6 +116,7 @@ export function HomeView({
               type="button"
               onClick={() => {
                 if (myStories.length > 0) {
+                  api.recordStoryView(myStories[0].id).catch(() => {});
                   setViewingMyStoryIdx(0);
                 } else {
                   onNavigate('create');
@@ -141,7 +157,7 @@ export function HomeView({
           </div>
 
           {/* Peer Builder Stories */}
-          {PEER_STUDENTS.map((peer) => {
+          {peerList.map((peer) => {
             const seen = seenStories.has(peer.id);
             return (
               <button
@@ -237,7 +253,7 @@ export function HomeView({
                   </div>
 
                   <div className="ts-snap-scroller pb-1">
-                    {PEER_STUDENTS.map((peer) => {
+                    {peerList.map((peer) => {
                       const isConnected = connectedIds.has(peer.id);
                       return (
                         <div
@@ -330,7 +346,7 @@ export function HomeView({
             </div>
 
             <div className="space-y-3">
-              {PEER_STUDENTS.map((peer) => {
+              {peerList.map((peer) => {
                 const isConnected = connectedIds.has(peer.id);
                 return (
                   <div key={peer.id} className="flex items-center justify-between gap-2.5">
@@ -385,7 +401,7 @@ export function HomeView({
               </button>
             </div>
             <div className="space-y-2">
-              {OPPORTUNITIES.slice(0, 2).map((opp) => (
+              {oppList.slice(0, 2).map((opp) => (
                 <button
                   key={opp.id}
                   type="button"

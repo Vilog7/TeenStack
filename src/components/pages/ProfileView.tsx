@@ -43,19 +43,27 @@ type ProfileTabId =
 interface ProfileViewProps {
   user: UserAccount;
   posts: FeedPost[];
+  peers?: PeerStudent[];
   savedPostIds: Set<string>;
   inspectingPeer: PeerStudent | null;
   connectedIds: Set<string>;
   onClearInspectingPeer: () => void;
   onSelectPeer: (peer: PeerStudent) => void;
   onToggleConnect: (peerId: string) => void;
-  onMessagePeer: (threadId?: string) => void;
+  onMessagePeer: (threadId?: string, peerId?: string) => void;
   onOpenPost: (post: FeedPost) => void;
   onNavigate: (section: NavSection) => void;
   onSaveProfilePatch: (
     patch: Partial<UserAccount['profile']>,
     nextName?: string
   ) => Promise<void>;
+  onAddProject?: (payload: {
+    title: string;
+    summary: string;
+    link: string;
+    tag: string;
+  }) => Promise<void>;
+  onAddAchievement?: (title: string) => Promise<void>;
   onOpenOnboardingWizard: () => void;
   onLogout?: () => void;
 }
@@ -83,6 +91,7 @@ function resolveThreadIdForPeer(peerId: string): string | undefined {
 export function ProfileView({
   user,
   posts,
+  peers = PEER_STUDENTS,
   savedPostIds,
   inspectingPeer,
   connectedIds,
@@ -93,6 +102,8 @@ export function ProfileView({
   onOpenPost,
   onNavigate,
   onSaveProfilePatch,
+  onAddProject,
+  onAddAchievement,
   onOpenOnboardingWizard,
   onLogout,
 }: ProfileViewProps) {
@@ -250,10 +261,11 @@ export function ProfileView({
   ];
 
   // Friends & Mutuals calculations
-  const connectedFriends = PEER_STUDENTS.filter((peer) => connectedIds.has(peer.id));
+  const peerPool = peers.length > 0 ? peers : PEER_STUDENTS;
+  const connectedFriends = peerPool.filter((peer) => connectedIds.has(peer.id));
   const userSkillSet = new Set(user.profile.skills.map((s) => s.toLowerCase()));
 
-  const mutualsList = PEER_STUDENTS.filter((peer) => peer.id !== targetId).map((peer) => {
+  const mutualsList = peerPool.filter((peer) => peer.id !== targetId).map((peer) => {
     const sharedSkills = peer.skills.filter((s) => userSkillSet.has(s.toLowerCase()));
     return {
       peer,
@@ -372,20 +384,29 @@ export function ProfileView({
         : `https://${rawLink}`
       : user.profile.portfolioUrl || 'https://teenstack.dev';
 
-    const nextProjects = [
-      {
-        id: `proj-${Date.now()}`,
+    if (onAddProject) {
+      await onAddProject({
         title: projTitle.trim(),
         summary: projSummary.trim() || 'Student build showcased on TeenStack.',
         link: normalizedLink,
         tag: projTag.trim() || 'Student Build',
-      },
-      ...user.profile.portfolioProjects,
-    ];
-    await onSaveProfilePatch({
-      portfolioProjects: nextProjects,
-      projectsCompleted: (user.profile.projectsCompleted || 0) + 1,
-    });
+      });
+    } else {
+      const nextProjects = [
+        {
+          id: `proj-${Date.now()}`,
+          title: projTitle.trim(),
+          summary: projSummary.trim() || 'Student build showcased on TeenStack.',
+          link: normalizedLink,
+          tag: projTag.trim() || 'Student Build',
+        },
+        ...user.profile.portfolioProjects,
+      ];
+      await onSaveProfilePatch({
+        portfolioProjects: nextProjects,
+        projectsCompleted: (user.profile.projectsCompleted || 0) + 1,
+      });
+    }
     setProjTitle('');
     setProjSummary('');
     setProjLink('');
@@ -395,8 +416,12 @@ export function ProfileView({
   const handleAddAchievement = async (e: FormEvent) => {
     e.preventDefault();
     if (!achTitle.trim()) return;
-    const nextAchievements = [achTitle.trim(), ...user.profile.achievements];
-    await onSaveProfilePatch({ achievements: nextAchievements });
+    if (onAddAchievement) {
+      await onAddAchievement(achTitle.trim());
+    } else {
+      const nextAchievements = [achTitle.trim(), ...user.profile.achievements];
+      await onSaveProfilePatch({ achievements: nextAchievements });
+    }
     setAchTitle('');
     setAddingAch(false);
   };
@@ -625,7 +650,9 @@ export function ProfileView({
 
               <button
                 type="button"
-                onClick={() => onMessagePeer(resolveThreadIdForPeer(inspectingPeer.id))}
+                onClick={() =>
+                  onMessagePeer(resolveThreadIdForPeer(inspectingPeer.id), inspectingPeer.id)
+                }
                 className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-[#258BFF]/45 bg-[#258BFF]/15 px-5 py-2 text-xs font-semibold text-white hover:bg-[#258BFF]/30"
               >
                 <MessageSquare className="h-3.5 w-3.5 text-[#27D9D0]" />
@@ -1205,7 +1232,7 @@ export function ProfileView({
                       <button
                         type="button"
                         aria-label={`Message ${friend.name}`}
-                        onClick={() => onMessagePeer(resolveThreadIdForPeer(friend.id))}
+                        onClick={() => onMessagePeer(resolveThreadIdForPeer(friend.id), friend.id)}
                         className="rounded-xl border border-[#258BFF]/35 bg-[#258BFF]/15 p-2 text-[#27D9D0] hover:bg-[#258BFF]/30"
                       >
                         <MessageSquare className="h-3.5 w-3.5" />

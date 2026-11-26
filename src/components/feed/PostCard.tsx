@@ -22,6 +22,7 @@ import { StudentAvatar } from '../ui/StudentAvatar';
 import { SolarisArtwork } from '../ui/SolarisArtwork';
 import { PEER_STUDENTS } from '../../data/catalog';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
+import { api } from '../../lib/api';
 import type { FeedPost } from '../../types';
 
 interface PostCardProps {
@@ -138,6 +139,7 @@ export function PostCard({
 
   const handleShare = () => {
     setCopied(true);
+    api.sharePost(post.id).catch(() => {});
     navigator.clipboard?.writeText(attachedLink || `https://teenstack.dev/posts/${post.id}`).catch(() => {});
     setTimeout(() => setCopied(false), 1600);
   };

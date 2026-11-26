@@ -298,7 +298,10 @@ export function AuthView({
                       <div className="flex flex-wrap items-center gap-2.5">
                         <button
                           type="button"
-                          onClick={() => setResetEmailSent(true)}
+                          onClick={async () => {
+                            await api.requestPasswordReset(identifier.trim());
+                            setResetEmailSent(true);
+                          }}
                           className="min-h-[44px] rounded-xl bg-[#258BFF] px-4 py-2 text-xs font-semibold text-white"
                         >
                           Send Recovery Link

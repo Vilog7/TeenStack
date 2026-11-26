@@ -14,6 +14,7 @@ import type { CourseItem, UserAccount } from '../../types';
 
 interface LearnViewProps {
   user: UserAccount;
+  courses?: CourseItem[];
   completedModuleKeys: Set<string>;
   onToggleModule: (moduleKey: string) => void;
   onShareCourseCertificate: (course: CourseItem) => Promise<void>;
@@ -23,15 +24,16 @@ const LEVELS = ['All', 'Beginner', 'Intermediate', 'Advanced'] as const;
 
 export function LearnView({
   user,
+  courses = COURSES,
   completedModuleKeys,
   onToggleModule,
   onShareCourseCertificate,
 }: LearnViewProps) {
   const [levelFilter, setLevelFilter] = useState<(typeof LEVELS)[number]>('All');
-  const [expandedCourseId, setExpandedCourseId] = useState<string>(COURSES[0].id);
+  const [expandedCourseId, setExpandedCourseId] = useState<string>(courses[0]?.id || 'course-1');
   const [certSharedId, setCertSharedId] = useState<string>('');
 
-  const filtered = COURSES.filter((c) => (levelFilter === 'All' ? true : c.level === levelFilter));
+  const filtered = courses.filter((c) => (levelFilter === 'All' ? true : c.level === levelFilter));
 
   return (
     <div className="space-y-5">

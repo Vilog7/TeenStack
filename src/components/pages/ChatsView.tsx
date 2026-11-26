@@ -11,10 +11,11 @@ import {
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { CHAT_THREADS } from '../../data/catalog';
 import { SPRINGS } from '../../lib/tokens';
-import type { ChatMessage, UserAccount } from '../../types';
+import type { ChatMessage, ChatThread, UserAccount } from '../../types';
 
 interface ChatsViewProps {
   user: UserAccount;
+  threads?: ChatThread[];
   messages: ChatMessage[];
   activeThreadId: string;
   mobileShowConversation: boolean;
@@ -31,6 +32,7 @@ const QUICK_PROMPTS = [
 
 export function ChatsView({
   user,
+  threads = CHAT_THREADS,
   messages,
   activeThreadId,
   mobileShowConversation,
@@ -40,22 +42,27 @@ export function ChatsView({
 }: ChatsViewProps) {
   const [draft, setDraft] = useState('');
   const [peerTyping, setPeerTyping] = useState(false);
+  const [sendError, setSendError] = useState('');
 
-  const activeThread = CHAT_THREADS.find((t) => t.id === activeThreadId) || CHAT_THREADS[0];
+  const threadList = threads.length > 0 ? threads : CHAT_THREADS;
+  const activeThread = threadList.find((t) => t.id === activeThreadId) || threadList[0];
   const threadMessages = messages.filter((m) => m.threadId === activeThread.id);
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     if (!draft.trim()) return;
     const text = draft.trim();
-    setDraft('');
-    await onSendMessage(activeThread.id, text);
-
-    // Subtle simulated peer typing feedback
-    setPeerTyping(true);
-    setTimeout(() => {
-      setPeerTyping(false);
-    }, 1400);
+    setSendError('');
+    try {
+      await onSendMessage(activeThread.id, text);
+      setDraft('');
+      setPeerTyping(true);
+      setTimeout(() => {
+        setPeerTyping(false);
+      }, 1400);
+    } catch (err: any) {
+      setSendError(err.message || 'Could not send message.');
+    }
   };
 
   return (
@@ -81,7 +88,7 @@ export function ChatsView({
           </div>
 
           <div className="divide-y divide-white/6 p-2.5">
-            {CHAT_THREADS.map((thread) => {
+            {threadList.map((thread) => {
               const selected = thread.id === activeThread.id;
               const lastMsg = [...messages].reverse().find((m) => m.threadId === thread.id);
 
@@ -116,7 +123,14 @@ export function ChatsView({
                       <span className="truncate font-heading text-sm font-bold text-white">
                         {thread.name}
                       </span>
-                      {thread.isGroup && <Users className="h-3.5 w-3.5 shrink-0 text-[#258BFF]" />}
+                      <div className="flex items-center gap-1.5">
+                        {thread.unread > 0 && (
+                          <span className="rounded-full bg-[#743BFF] px-1.5 py-0.5 text-[10px] font-bold text-white">
+                            {thread.unread}
+                          </span>
+                        )}
+                        {thread.isGroup && <Users className="h-3.5 w-3.5 shrink-0 text-[#258BFF]" />}
+                      </div>
                     </div>
                     <div className="truncate text-[11px] text-[#27D9D0]">{thread.roleBadge}</div>
                     {lastMsg && (
@@ -229,6 +243,14 @@ export function ChatsView({
 
           {/* Quick Collab Chips + Message Input */}
           <div className="border-t border-white/8 bg-[#080910]/55 p-3.5 sm:p-4">
+            {sendError && (
+              <div
+                role="alert"
+                className="mb-2.5 rounded-xl border border-rose-500/40 bg-rose-500/12 px-3 py-2 text-xs text-rose-200"
+              >
+                {sendError}
+              </div>
+            )}
             <div className="ts-snap-scroller mb-2.5 pb-1">
               {QUICK_PROMPTS.map((qp) => (
                 <button

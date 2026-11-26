@@ -16,7 +16,7 @@ import { LearnView } from './components/pages/LearnView';
 import { ProfileView } from './components/pages/ProfileView';
 import { ExpandedPostModal } from './components/feed/ExpandedPostModal';
 import { SearchModal } from './components/overlays/SearchModal';
-import { PEER_STUDENTS } from './data/catalog';
+import { PEER_STUDENTS, OPPORTUNITIES, COURSES, CHAT_THREADS } from './data/catalog';
 import { SPRINGS } from './lib/tokens';
 import { api } from './lib/api';
 import type {
@@ -25,7 +25,9 @@ import type {
   UserAccount,
   FeedPost,
   ChatMessage,
+  ChatThread,
   PeerStudent,
+  OpportunityItem,
   UserInteraction,
   CourseItem,
 } from './types';
@@ -66,7 +68,12 @@ export function App() {
 
   // Domain state backed by SQLite
   const [posts, setPosts] = useState<FeedPost[]>([]);
+  const [threads, setThreads] = useState<ChatThread[]>(CHAT_THREADS);
+  const [unreadChatsCount, setUnreadChatsCount] = useState<number>(3);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [peers, setPeers] = useState<PeerStudent[]>(PEER_STUDENTS);
+  const [opportunities, setOpportunities] = useState<OpportunityItem[]>(OPPORTUNITIES);
+  const [courses, setCourses] = useState<CourseItem[]>(COURSES);
   const [likedPostIds, setLikedPostIds] = useState<Set<string>>(new Set());
   const [savedPostIds, setSavedPostIds] = useState<Set<string>>(new Set());
   const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set(['peer-maya']));
@@ -119,13 +126,32 @@ export function App() {
 
   const refreshContent = useCallback(async () => {
     try {
-      const [pRes, mRes] = await Promise.all([api.getPosts(), api.getMessages()]);
-      setPosts(pRes.posts);
-      setMessages(mRes.messages);
+      const boot = await api.getBootstrap();
+      setPosts(boot.posts);
+      setThreads(boot.threads);
+      setUnreadChatsCount(boot.unreadChatsCount);
+      setMessages(boot.messages);
+      setPeers(boot.peers);
+      setOpportunities(boot.opportunities);
+      setCourses(boot.courses);
+      if (boot.completedModuleKeys) {
+        setCompletedModules(new Set(boot.completedModuleKeys));
+      }
+      if (boot.interactions) {
+        hydrateInteractions(boot.interactions);
+      }
+      if (boot.friendIds && boot.friendIds.length > 0) {
+        setConnectedIds(new Set(boot.friendIds));
+      }
     } catch {
-      // ignore if offline
+      try {
+        const pRes = await api.getPosts();
+        setPosts(pRes.posts);
+      } catch {
+        // ignore if offline
+      }
     }
-  }, []);
+  }, [hydrateInteractions]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -279,6 +305,8 @@ export function App() {
       return;
     }
     const found =
+      peers.find((p) => p.id === authorId) ||
+      peers.find((p) => p.name === authorName) ||
       PEER_STUDENTS.find((p) => p.id === authorId) ||
       PEER_STUDENTS.find((p) => p.name === authorName) || {
         id: authorId,
@@ -407,12 +435,21 @@ export function App() {
           <AppShell
             activeSection={route as NavSection}
             user={user}
-            unreadChatsCount={3}
+            unreadChatsCount={unreadChatsCount}
             ambientPaused={ambientPaused}
             onToggleAmbient={() => setAmbientPaused((v) => !v)}
             onNavigate={(sec) => {
               if (sec === 'profile') setInspectingPeer(null);
-              if (sec === 'chats') setMobileShowConversation(false);
+              if (sec === 'chats') {
+                setMobileShowConversation(false);
+                api
+                  .markThreadRead(activeThreadId)
+                  .then((r) => {
+                    setThreads(r.threads);
+                    setUnreadChatsCount(r.totalUnread);
+                  })
+                  .catch(() => {});
+              }
               navigate(sec);
             }}
             onOpenQuickCreate={() => setQuickCreateOpen(true)}
@@ -420,6 +457,13 @@ export function App() {
             onQuickSelectThread={(threadId) => {
               setActiveThreadId(threadId);
               setMobileShowConversation(true);
+              api
+                .markThreadRead(threadId)
+                .then((r) => {
+                  setThreads(r.threads);
+                  setUnreadChatsCount(r.totalUnread);
+                })
+                .catch(() => {});
               navigate('chats');
             }}
             onLogout={handleLogout}
@@ -436,6 +480,8 @@ export function App() {
                   <HomeView
                     user={user}
                     posts={posts}
+                    peers={peers}
+                    opportunities={opportunities}
                     messages={messages}
                     likedPostIds={likedPostIds}
                     savedPostIds={savedPostIds}
@@ -465,6 +511,7 @@ export function App() {
                   <PostsView
                     user={user}
                     posts={posts}
+                    opportunities={opportunities}
                     likedPostIds={likedPostIds}
                     savedPostIds={savedPostIds}
                     appliedOppIds={appliedOppIds}
@@ -473,9 +520,9 @@ export function App() {
                     onClearSkillFilter={() => setActiveSkillFilter('')}
                     onToggleLike={handleToggleLike}
                     onToggleSave={handleToggleSave}
-                    onToggleApplyOpp={(oppId) => {
+                    onToggleApplyOpp={async (oppId, pitchNote) => {
                       setAppliedOppIds((prev) => new Set(prev).add(oppId));
-                      api.toggleInteraction('opportunity_apply', oppId).catch(() => {});
+                      await api.applyToOpportunity(oppId, pitchNote || '').catch(() => {});
                     }}
                     onToggleSaveOpp={(oppId) => {
                       setSavedOppIds((prev) => {
@@ -485,6 +532,10 @@ export function App() {
                         return next;
                       });
                       api.toggleInteraction('opportunity_save', oppId).catch(() => {});
+                    }}
+                    onCreateOpportunity={async (payload) => {
+                      const res = await api.createOpportunity(payload);
+                      setOpportunities((prev) => [res.opportunity, ...prev]);
                     }}
                     onOpenPost={setExpandedPost}
                     onInspectAuthor={handleInspectAuthor}
@@ -495,11 +546,12 @@ export function App() {
                 {route === 'opportunities' && (
                   <OpportunitiesView
                     user={user}
+                    opportunities={opportunities}
                     appliedIds={appliedOppIds}
                     savedOppIds={savedOppIds}
-                    onToggleApply={(oppId) => {
+                    onToggleApply={async (oppId, pitchNote) => {
                       setAppliedOppIds((prev) => new Set(prev).add(oppId));
-                      api.toggleInteraction('opportunity_apply', oppId).catch(() => {});
+                      await api.applyToOpportunity(oppId, pitchNote || '').catch(() => {});
                     }}
                     onToggleSaveOpp={(oppId) => {
                       setSavedOppIds((prev) => {
@@ -510,18 +562,30 @@ export function App() {
                       });
                       api.toggleInteraction('opportunity_save', oppId).catch(() => {});
                     }}
+                    onCreateOpportunity={async (payload) => {
+                      const res = await api.createOpportunity(payload);
+                      setOpportunities((prev) => [res.opportunity, ...prev]);
+                    }}
                   />
                 )}
 
                 {route === 'chats' && (
                   <ChatsView
                     user={user}
+                    threads={threads}
                     messages={messages}
                     activeThreadId={activeThreadId}
                     mobileShowConversation={mobileShowConversation}
                     onSelectThread={(tId, openMobile) => {
                       setActiveThreadId(tId);
                       setMobileShowConversation(openMobile);
+                      api
+                        .markThreadRead(tId)
+                        .then((r) => {
+                          setThreads(r.threads);
+                          setUnreadChatsCount(r.totalUnread);
+                        })
+                        .catch(() => {});
                     }}
                     onBackToListMobile={() => setMobileShowConversation(false)}
                     onSendMessage={handleSendMessage}
@@ -535,6 +599,7 @@ export function App() {
                 {route === 'learn' && (
                   <LearnView
                     user={user}
+                    courses={courses}
                     completedModuleKeys={completedModules}
                     onToggleModule={(modKey) => {
                       setCompletedModules((prev) => {
@@ -543,7 +608,17 @@ export function App() {
                         else next.add(modKey);
                         return next;
                       });
-                      api.toggleInteraction('course_module', modKey).catch(() => {});
+                      const [cId, mCode] = modKey.split(':');
+                      if (cId && mCode) {
+                        api
+                          .toggleCourseModule(cId, mCode)
+                          .then((res) => {
+                            setCourses(res.courses);
+                            setCompletedModules(new Set(res.completedModuleKeys));
+                            if (res.user) setUser(res.user);
+                          })
+                          .catch(() => {});
+                      }
                     }}
                     onShareCourseCertificate={handleShareCourseCertificate}
                   />
@@ -553,14 +628,26 @@ export function App() {
                   <ProfileView
                     user={user}
                     posts={posts}
+                    peers={peers}
                     savedPostIds={savedPostIds}
                     inspectingPeer={inspectingPeer}
                     connectedIds={connectedIds}
                     onClearInspectingPeer={() => setInspectingPeer(null)}
                     onSelectPeer={(peer) => setInspectingPeer(peer)}
                     onToggleConnect={handleToggleConnect}
-                    onMessagePeer={(threadId) => {
-                      if (threadId) setActiveThreadId(threadId);
+                    onMessagePeer={async (threadId, peerId) => {
+                      if (peerId) {
+                        try {
+                          const opened = await api.openDirectThread(peerId);
+                          setThreads(opened.threads);
+                          setUnreadChatsCount(opened.totalUnread);
+                          setActiveThreadId(opened.threadId);
+                        } catch {
+                          if (threadId) setActiveThreadId(threadId);
+                        }
+                      } else if (threadId) {
+                        setActiveThreadId(threadId);
+                      }
                       setMobileShowConversation(true);
                       navigate('chats');
                     }}
@@ -571,6 +658,14 @@ export function App() {
                         profilePatch: patch,
                         fullName: nextName,
                       });
+                      setUser(res.user);
+                    }}
+                    onAddProject={async (payload) => {
+                      const res = await api.addProject(payload);
+                      setUser(res.user);
+                    }}
+                    onAddAchievement={async (title) => {
+                      const res = await api.addAchievement({ title });
                       setUser(res.user);
                     }}
                     onOpenOnboardingWizard={() => navigate('onboarding')}
@@ -598,6 +693,9 @@ export function App() {
             <SearchModal
               open={searchOpen}
               posts={posts}
+              peers={peers}
+              opportunities={opportunities}
+              courses={courses}
               onClose={() => setSearchOpen(false)}
               onNavigate={(sec) => navigate(sec)}
               onSelectPeer={(peer) => {

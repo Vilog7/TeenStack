@@ -4,11 +4,12 @@ import { Compass, Briefcase, LayoutGrid, Rows3, X } from 'lucide-react';
 import { PostCard } from '../feed/PostCard';
 import { OpportunitiesView } from './OpportunitiesView';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
-import type { FeedPost, UserAccount } from '../../types';
+import type { FeedPost, OpportunityItem, UserAccount } from '../../types';
 
 interface PostsViewProps {
   user: UserAccount;
   posts: FeedPost[];
+  opportunities?: OpportunityItem[];
   likedPostIds: Set<string>;
   savedPostIds: Set<string>;
   appliedOppIds: Set<string>;
@@ -17,8 +18,18 @@ interface PostsViewProps {
   onClearSkillFilter: () => void;
   onToggleLike: (postId: string) => void;
   onToggleSave: (postId: string) => void;
-  onToggleApplyOpp: (oppId: string) => void;
+  onToggleApplyOpp: (oppId: string, pitchNote?: string) => Promise<void> | void;
   onToggleSaveOpp: (oppId: string) => void;
+  onCreateOpportunity?: (payload: {
+    title: string;
+    organization?: string;
+    type: OpportunityItem['type'];
+    deadline: string;
+    mode: OpportunityItem['Mode'];
+    reward: string;
+    skills: string[];
+    description: string;
+  }) => Promise<void>;
   onOpenPost: (post: FeedPost) => void;
   onInspectAuthor: (authorId: string, authorName: string, avatar: string) => void;
   onAddComment?: (postId: string, text: string) => Promise<void>;
@@ -36,6 +47,7 @@ const CATEGORIES = [
 export function PostsView({
   user,
   posts,
+  opportunities,
   likedPostIds,
   savedPostIds,
   appliedOppIds,
@@ -46,6 +58,7 @@ export function PostsView({
   onToggleSave,
   onToggleApplyOpp,
   onToggleSaveOpp,
+  onCreateOpportunity,
   onOpenPost,
   onInspectAuthor,
   onAddComment,
@@ -157,10 +170,12 @@ export function PostsView({
       {sectionTab === 'ads' ? (
         <OpportunitiesView
           user={user}
+          opportunities={opportunities}
           appliedIds={appliedOppIds}
           savedOppIds={savedOppIds}
           onToggleApply={onToggleApplyOpp}
           onToggleSaveOpp={onToggleSaveOpp}
+          onCreateOpportunity={onCreateOpportunity}
         />
       ) : (
         <>
