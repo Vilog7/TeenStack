@@ -3,6 +3,8 @@ import { MotionConfig, AnimatePresence, motion } from 'motion/react';
 import { AmbientBackground } from './components/motion/AmbientBackground';
 import { LandingView } from './components/landing/LandingView';
 import { AuthView } from './components/auth/AuthView';
+import { VerificationFlowView } from './components/verification/VerificationFlowView';
+import { ParentPortalView } from './components/verification/ParentPortalView';
 import { OnboardingView } from './components/onboarding/OnboardingView';
 import { AppShell } from './components/shell/AppShell';
 import { HomeView } from './components/pages/HomeView';
@@ -32,6 +34,8 @@ const VALID_ROUTES: AppRoute[] = [
   'landing',
   'login',
   'signup',
+  'verification',
+  'parent-portal',
   'onboarding',
   'home',
   'posts',
@@ -42,13 +46,20 @@ const VALID_ROUTES: AppRoute[] = [
   'profile',
 ];
 
-function parseHashRoute(): AppRoute | null {
-  const raw = window.location.hash.replace(/^#\/?/, '').trim() as AppRoute;
-  return VALID_ROUTES.includes(raw) ? raw : null;
+function parseHashLocation(): { route: AppRoute | null; inviteToken: string } {
+  const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+  const [pathPart, queryPart = ''] = rawHash.split('?');
+  const params = new URLSearchParams(queryPart);
+  const inviteToken = params.get('invite') || params.get('token') || '';
+  const route = VALID_ROUTES.includes(pathPart as AppRoute) ? (pathPart as AppRoute) : null;
+  return { route, inviteToken };
 }
 
 export function App() {
-  const [route, setRoute] = useState<AppRoute>(() => parseHashRoute() || 'landing');
+  const [route, setRoute] = useState<AppRoute>(() => parseHashLocation().route || 'landing');
+  const [parentInviteToken, setParentInviteToken] = useState<string>(
+    () => parseHashLocation().inviteToken
+  );
   const [user, setUser] = useState<UserAccount | null>(null);
   const [booting, setBooting] = useState(true);
   const [ambientPaused, setAmbientPaused] = useState(false);
@@ -118,8 +129,9 @@ export function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      const parsed = parseHashRoute();
-      if (parsed) setRoute(parsed);
+      const parsed = parseHashLocation();
+      if (parsed.inviteToken) setParentInviteToken(parsed.inviteToken);
+      if (parsed.route) setRoute(parsed.route);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -127,13 +139,26 @@ export function App() {
 
   useEffect(() => {
     (async () => {
+      const initialLoc = parseHashLocation();
+      if (initialLoc.route === 'parent-portal') {
+        if (initialLoc.inviteToken) setParentInviteToken(initialLoc.inviteToken);
+        setBooting(false);
+        return;
+      }
       await refreshContent();
       const session = await api.me();
       if (session.authenticated && session.user) {
         setUser(session.user);
         hydrateInteractions(session.interactions || []);
-        const initialHash = parseHashRoute();
-        if (!initialHash || initialHash === 'landing' || initialHash === 'login' || initialHash === 'signup') {
+        const acctStatus = session.user.accountStatus || 'ACTIVE';
+        if (acctStatus !== 'ACTIVE') {
+          navigate('verification');
+        } else if (
+          !initialLoc.route ||
+          initialLoc.route === 'landing' ||
+          initialLoc.route === 'login' ||
+          initialLoc.route === 'signup'
+        ) {
           navigate(session.user.onboardingCompleted ? 'home' : 'onboarding');
         }
       }
@@ -149,12 +174,18 @@ export function App() {
     hydrateInteractions(interactions);
     await refreshContent();
 
+    const acctStatus = authedUser.accountStatus || 'ACTIVE';
+    if (acctStatus !== 'ACTIVE') {
+      // Strictly gate PENDING_VERIFICATION / unverified accounts at the Verification Flow
+      setUser(authedUser);
+      navigate('verification');
+      return;
+    }
+
     if (isNewSignup) {
-      // Newly signed-up users MUST complete Setup -> Setup Profile before reaching Home
       setUser(authedUser);
       navigate('onboarding');
     } else {
-      // Returning users logging in go DIRECTLY to the Home tab!
       let readyUser = authedUser;
       if (!authedUser.onboardingCompleted) {
         try {
@@ -297,11 +328,20 @@ export function App() {
     );
   }
 
-  const mustCompleteSetup = Boolean(user && !user.onboardingCompleted);
+  const isAccountVerifiedActive = Boolean(
+    user && (user.accountStatus || 'ACTIVE') === 'ACTIVE'
+  );
+  const mustVerifyAccount = Boolean(user && !isAccountVerifiedActive);
+  const mustCompleteSetup = Boolean(
+    user && isAccountVerifiedActive && !user.onboardingCompleted && route !== 'verification'
+  );
 
   const isAuthAppSection =
     user &&
+    isAccountVerifiedActive &&
     !mustCompleteSetup &&
+    route !== 'parent-portal' &&
+    route !== 'verification' &&
     ['home', 'posts', 'opportunities', 'chats', 'create', 'learn', 'profile'].includes(route);
 
   return (
@@ -310,13 +350,43 @@ export function App() {
         {/* Continuous Morphing Background Orbs & Grid */}
         <AmbientBackground route={mustCompleteSetup ? 'onboarding' : route} paused={ambientPaused} />
 
-        {/* Pre-Auth & Required Setup / Setup Profile Views */}
+        {/* Pre-Auth, Parent Portal, Verification Gate & Setup Views */}
         {!isAuthAppSection ? (
-          route === 'login' || route === 'signup' ? (
+          route === 'parent-portal' ? (
+            <ParentPortalView
+              initialInviteToken={parentInviteToken}
+              onExitPortal={() => {
+                setParentInviteToken('');
+                if (user) {
+                  navigate(isAccountVerifiedActive ? 'home' : 'verification');
+                } else {
+                  navigate('login');
+                }
+              }}
+            />
+          ) : (mustVerifyAccount || route === 'verification') && user ? (
+            <VerificationFlowView
+              user={user}
+              onUpdateUser={setUser}
+              onProceedAfterApproval={() => {
+                navigate(user.onboardingCompleted ? 'home' : 'onboarding');
+              }}
+              onOpenParentPortalWithToken={(invTok) => {
+                setParentInviteToken(invTok);
+                window.history.pushState(null, '', `#/parent-portal?invite=${invTok}`);
+                setRoute('parent-portal');
+              }}
+              onLogout={handleLogout}
+            />
+          ) : route === 'login' || route === 'signup' ? (
             <AuthView
               mode={route}
               onSwitchMode={(next) => navigate(next)}
               onBackToLanding={() => navigate('landing')}
+              onOpenParentPortal={() => {
+                setParentInviteToken('');
+                navigate('parent-portal');
+              }}
               onAuthenticated={handleAuthenticated}
             />
           ) : (route === 'onboarding' || mustCompleteSetup) && user ? (

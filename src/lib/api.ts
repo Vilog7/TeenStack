@@ -1,20 +1,32 @@
-import type { FeedPost, UserAccount, UserInteraction, ChatMessage } from '../types';
+import type {
+  FeedPost,
+  UserAccount,
+  UserInteraction,
+  ChatMessage,
+  StudentVerificationOverview,
+  ParentPortalState,
+} from '../types';
 
 const TOKEN_KEY = 'teenstack_auth_token';
+const PARENT_SESSION_KEY = 'teenstack_parent_portal_token';
 const STATIC_USERS_KEY = 'teenstack_static_users_v2';
 const STATIC_CURRENT_USER_ID_KEY = 'teenstack_static_uid_v2';
 const STATIC_POSTS_KEY = 'teenstack_static_posts_v2';
 const STATIC_MESSAGES_KEY = 'teenstack_static_messages_v2';
 const STATIC_INTERACTIONS_KEY = 'teenstack_static_interactions_v2';
+const STATIC_PARENT_INVITES_KEY = 'teenstack_static_parent_invites_v1';
 
 const DEFAULT_DEMO_USER: UserAccount & { passwordPlain?: string } = {
   id: 'usr-demo-arav',
   fullName: 'Arav Sharma',
   username: 'arav_dev',
   email: 'arav@teenstack.edu',
-  phone: '••••••••••••4312',
-  rawPhone: '+1 (415) 890-4312',
+  phone: '••••••4312',
+  rawPhone: '+91 98201 44312',
   dob: '2009-05-14',
+  declaredDob: '2009-05-14',
+  verifiedAgeBand: 'VERIFIED_13_17',
+  accountStatus: 'ACTIVE',
   age: 17,
   marketingOptIn: false,
   onboardingStep: 5,
@@ -424,11 +436,23 @@ export const api = {
         fullName: payload.fullName.trim(),
         username: cleanUsername,
         email: cleanEmail,
-        phone: payload.phone ? payload.phone.replace(/.(?=.{4})/g, '•') : '',
+        phone: payload.phone ? `••••••${payload.phone.replace(/\D+/g, '').slice(-4)}` : '',
         rawPhone: payload.phone,
         dob: payload.dob,
+        declaredDob: payload.dob,
+        verifiedAgeBand: 'UNVERIFIED',
+        accountStatus: 'PENDING_VERIFICATION',
+        verificationOverview: {
+          accountStatus: 'PENDING_VERIFICATION',
+          verifiedAgeBand: 'UNVERIFIED',
+          environmentMode: 'sandbox_mock',
+          productionActivationDisabled: true,
+          ageVerification: null,
+          parentVerification: null,
+          parentalConsent: null,
+        },
         age: payload.age || 16,
-        marketingOptIn: payload.marketingOptIn,
+        marketingOptIn: false,
         onboardingStep: 1,
         onboardingCompleted: false,
         passwordPlain: payload.password,
@@ -660,6 +684,540 @@ export const api = {
       const all = [...getStaticMessages(), msg];
       saveJson(STATIC_MESSAGES_KEY, all);
       return { message: msg };
+    }
+  },
+
+  // ===========================================================================
+  // SIGNZY AGE VERIFICATION & PARENTAL CONSENT CLIENT API
+  // ===========================================================================
+  getStoredParentSessionToken(): string {
+    try {
+      return sessionStorage.getItem(PARENT_SESSION_KEY) || '';
+    } catch {
+      return '';
+    }
+  },
+
+  setStoredParentSessionToken(token: string) {
+    try {
+      if (token) sessionStorage.setItem(PARENT_SESSION_KEY, token);
+      else sessionStorage.removeItem(PARENT_SESSION_KEY);
+    } catch {
+      // ignore
+    }
+  },
+
+  async getVerificationStatus(): Promise<{
+    user: UserAccount;
+    overview: StudentVerificationOverview;
+  }> {
+    try {
+      return await request('/api/verification/status');
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const uid = localStorage.getItem(STATIC_CURRENT_USER_ID_KEY) || DEFAULT_DEMO_USER.id;
+      const found = getStaticUsers().find((u) => u.id === uid) || DEFAULT_DEMO_USER;
+      const overview: StudentVerificationOverview = found.verificationOverview || {
+        accountStatus: found.accountStatus || 'ACTIVE',
+        verifiedAgeBand: found.verifiedAgeBand || 'VERIFIED_13_17',
+        environmentMode: 'sandbox_mock',
+        productionActivationDisabled: true,
+        ageVerification: null,
+        parentVerification: null,
+        parentalConsent: null,
+      };
+      return { user: { ...found, verificationOverview: overview }, overview };
+    }
+  },
+
+  async initiateAgeVerification(idempotencyKey: string): Promise<{
+    verificationSessionId: string;
+    status: string;
+    hostedUrl: string;
+    expiresAt: string;
+    isSandboxMock: boolean;
+  }> {
+    try {
+      return await request('/api/verification/age/initiate', {
+        method: 'POST',
+        body: JSON.stringify({ idempotencyKey }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const uid = localStorage.getItem(STATIC_CURRENT_USER_ID_KEY) || DEFAULT_DEMO_USER.id;
+      const users = getStaticUsers();
+      const idx = users.findIndex((u) => u.id === uid);
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      if (idx >= 0) {
+        const prev = users[idx];
+        const ov: StudentVerificationOverview = prev.verificationOverview || {
+          accountStatus: prev.accountStatus || 'PENDING_VERIFICATION',
+          verifiedAgeBand: prev.verifiedAgeBand || 'UNVERIFIED',
+          environmentMode: 'sandbox_mock',
+          productionActivationDisabled: true,
+          ageVerification: null,
+          parentVerification: null,
+          parentalConsent: null,
+        };
+        ov.ageVerification = {
+          status: 'PENDING',
+          verifiedAgeBand: 'UNVERIFIED',
+          hostedUrl: '',
+          expiresAt,
+          isSandboxMock: true,
+        };
+        users[idx] = { ...prev, verificationOverview: ov };
+        saveJson(STATIC_USERS_KEY, users);
+      }
+      return {
+        verificationSessionId: `agv-static-${Date.now()}`,
+        status: 'PENDING',
+        hostedUrl: '',
+        expiresAt,
+        isSandboxMock: true,
+      };
+    }
+  },
+
+  async pollAgeVerification(): Promise<{ user: UserAccount }> {
+    return request('/api/verification/age/poll', { method: 'POST', body: '{}' });
+  },
+
+  async simulateSandboxAgeVerification(scenario: string): Promise<{
+    user: UserAccount;
+    overview: StudentVerificationOverview;
+  }> {
+    try {
+      return await request('/api/verification/age/sandbox-simulate', {
+        method: 'POST',
+        body: JSON.stringify({ scenario }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const uid = localStorage.getItem(STATIC_CURRENT_USER_ID_KEY) || DEFAULT_DEMO_USER.id;
+      const users = getStaticUsers();
+      const idx = users.findIndex((u) => u.id === uid);
+      const target = idx >= 0 ? users[idx] : DEFAULT_DEMO_USER;
+
+      let nextStatus: UserAccount['accountStatus'] = 'VERIFICATION_FAILED';
+      let nextBand: UserAccount['verifiedAgeBand'] = 'UNVERIFIED';
+      let ageVerifStatus: NonNullable<StudentVerificationOverview['ageVerification']>['status'] =
+        'VERIFICATION_FAILED';
+
+      if (scenario === 'VERIFIED_13_17') {
+        nextStatus = 'AGE_VERIFIED_AWAITING_PARENT';
+        nextBand = 'VERIFIED_13_17';
+        ageVerifStatus = 'VERIFIED_13_17';
+      } else if (scenario === 'VERIFIED_18_PLUS') {
+        nextStatus = 'ACTIVE';
+        nextBand = 'VERIFIED_18_PLUS';
+        ageVerifStatus = 'VERIFIED_18_PLUS';
+      } else if (scenario === 'UNDER_13') {
+        nextStatus = 'REJECTED_UNDER_13';
+        nextBand = 'UNDER_13';
+        ageVerifStatus = 'UNDER_13';
+      } else if (scenario === 'NAME_MISMATCH' || scenario === 'MANUAL_REVIEW') {
+        nextStatus = 'MANUAL_REVIEW';
+        nextBand = 'UNVERIFIED';
+        ageVerifStatus = 'MANUAL_REVIEW';
+      }
+
+      const ov: StudentVerificationOverview = {
+        accountStatus: nextStatus,
+        verifiedAgeBand: nextBand,
+        environmentMode: 'sandbox_mock',
+        productionActivationDisabled: true,
+        ageVerification: {
+          status: ageVerifStatus,
+          verifiedAgeBand: nextBand,
+          hostedUrl: '',
+          expiresAt: new Date(Date.now() + 900_000).toISOString(),
+          completedAt: new Date().toISOString(),
+          isSandboxMock: true,
+        },
+        parentVerification: target.verificationOverview?.parentVerification || null,
+        parentalConsent: target.verificationOverview?.parentalConsent || null,
+      };
+
+      const updated = {
+        ...target,
+        accountStatus: nextStatus,
+        verifiedAgeBand: nextBand,
+        verificationOverview: ov,
+      };
+      if (idx >= 0) {
+        users[idx] = updated;
+        saveJson(STATIC_USERS_KEY, users);
+      }
+      return { user: updated, overview: ov };
+    }
+  },
+
+  async inviteParentVerification(payload: {
+    parentEmail: string;
+    parentMobile: string;
+  }): Promise<{
+    parentVerificationId: string;
+    inviteExpiresAt: string;
+    maskedParentMobile: string;
+    sandboxPortalInviteToken?: string;
+    user: UserAccount;
+  }> {
+    try {
+      return await request('/api/verification/parent/invite', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const uid = localStorage.getItem(STATIC_CURRENT_USER_ID_KEY) || DEFAULT_DEMO_USER.id;
+      const users = getStaticUsers();
+      const idx = users.findIndex((u) => u.id === uid);
+      const student = idx >= 0 ? users[idx] : DEFAULT_DEMO_USER;
+      const normMobile = (s: string) => s.replace(/\D+/g, '').replace(/^91(?=\d{10}$)/, '');
+
+      if (
+        payload.parentEmail.trim().toLowerCase() === student.email.trim().toLowerCase() ||
+        normMobile(payload.parentMobile) === normMobile(student.rawPhone || '')
+      ) {
+        throw new Error(
+          "Parent's mobile number and email address must belong to your parent or legal guardian and cannot match the student's contact details."
+        );
+      }
+
+      const token = `sbx_inv_${Date.now()}`;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      invites[token] = {
+        id: `prv-${Date.now()}`,
+        studentId: student.id,
+        parentName: '',
+        parentEmail: payload.parentEmail.trim(),
+        parentMobile: payload.parentMobile.trim(),
+        relationshipType: 'UNSPECIFIED',
+        adultVerificationStatus: 'PENDING',
+        authorityVerificationStatus: 'PENDING',
+        consumed: false,
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        consent: null,
+      };
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+
+      const masked = `••••••${payload.parentMobile.replace(/\D+/g, '').slice(-4)}`;
+      const ov: StudentVerificationOverview = {
+        ...(student.verificationOverview || {
+          accountStatus: 'AGE_VERIFIED_AWAITING_PARENT',
+          verifiedAgeBand: 'VERIFIED_13_17',
+          environmentMode: 'sandbox_mock',
+          productionActivationDisabled: true,
+          ageVerification: null,
+          parentalConsent: null,
+        }),
+        parentVerification: {
+          initiated: true,
+          maskedParentMobile: masked,
+          relationshipType: 'UNSPECIFIED',
+          inviteConsumed: false,
+          inviteExpired: false,
+          adultVerificationStatus: 'PENDING',
+          authorityVerificationStatus: 'PENDING',
+        },
+      };
+      const updated = { ...student, verificationOverview: ov };
+      if (idx >= 0) {
+        users[idx] = updated;
+        saveJson(STATIC_USERS_KEY, users);
+      }
+
+      return {
+        parentVerificationId: invites[token].id,
+        inviteExpiresAt: new Date(invites[token].expiresAt).toISOString(),
+        maskedParentMobile: masked,
+        sandboxPortalInviteToken: token,
+        user: updated,
+      };
+    }
+  },
+
+  async exchangeParentInviteToken(inviteToken: string): Promise<{
+    parentSessionToken: string;
+    parentVerificationId: string;
+  }> {
+    try {
+      const res = await request<{ parentSessionToken: string; parentVerificationId: string }>(
+        '/api/parent-portal/session/exchange',
+        {
+          method: 'POST',
+          body: JSON.stringify({ inviteToken }),
+        }
+      );
+      this.setStoredParentSessionToken(res.parentSessionToken);
+      return res;
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const entry = invites[inviteToken];
+      if (!entry) throw new Error('Parent verification link is invalid or was not found.');
+      if (entry.consumed) {
+        throw new Error('This single-use parent verification link has already been used.');
+      }
+      if (entry.expiresAt <= Date.now()) {
+        throw new Error('This parent verification link has expired.');
+      }
+      entry.consumed = true;
+      const pSession = `psess_${Date.now()}`;
+      entry.sessionToken = pSession;
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+      this.setStoredParentSessionToken(pSession);
+      return { parentSessionToken: pSession, parentVerificationId: entry.id };
+    }
+  },
+
+  async getParentPortalState(parentSessionToken: string): Promise<ParentPortalState> {
+    try {
+      return await request('/api/parent-portal/state', {
+        headers: { 'X-Parent-Session': parentSessionToken },
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const entry = Object.values(invites).find((x: any) => x.sessionToken === parentSessionToken);
+      if (!entry) throw new Error('Valid parent verification session required.');
+      const student =
+        getStaticUsers().find((u) => u.id === entry.studentId) || DEFAULT_DEMO_USER;
+      return {
+        consentVersion: 'DPDP-TEENSTACK-CONSENT-v2026.1',
+        environmentMode: 'sandbox_mock',
+        productionActivationDisabled: true,
+        student: {
+          fullName: student.fullName,
+          username: student.username,
+          verifiedAgeBand: student.verifiedAgeBand || 'VERIFIED_13_17',
+          accountStatus: student.accountStatus || 'AGE_VERIFIED_AWAITING_PARENT',
+        },
+        parentVerification: {
+          id: entry.id,
+          parentName: entry.parentName,
+          parentEmail: entry.parentEmail,
+          parentMobile: entry.parentMobile,
+          relationshipType: entry.relationshipType,
+          adultVerificationStatus: entry.adultVerificationStatus,
+          authorityVerificationStatus: entry.authorityVerificationStatus,
+        },
+        consent: entry.consent,
+      };
+    }
+  },
+
+  async submitParentDetails(
+    parentSessionToken: string,
+    payload: {
+      parentName: string;
+      parentMobile: string;
+      parentEmail: string;
+      relationshipType: 'MOTHER' | 'FATHER' | 'COURT_APPOINTED_GUARDIAN';
+    }
+  ) {
+    try {
+      return await request('/api/parent-portal/details', {
+        method: 'POST',
+        headers: { 'X-Parent-Session': parentSessionToken },
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const key = Object.keys(invites).find((k) => invites[k].sessionToken === parentSessionToken);
+      if (!key) throw new Error('Parent session expired.');
+      const entry = invites[key];
+      const student = getStaticUsers().find((u) => u.id === entry.studentId);
+      if (
+        student &&
+        (payload.parentEmail.toLowerCase() === student.email.toLowerCase() ||
+          payload.parentName.trim().toLowerCase() === student.fullName.trim().toLowerCase())
+      ) {
+        throw new Error('Parent details cannot match the student name or contact details.');
+      }
+      entry.parentName = payload.parentName;
+      entry.parentMobile = payload.parentMobile;
+      entry.parentEmail = payload.parentEmail;
+      entry.relationshipType = payload.relationshipType;
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+      return { parentVerification: entry };
+    }
+  },
+
+  async verifyParentIdentity(
+    parentSessionToken: string,
+    payload: { scenario: string; sandboxAuthorityVerified: boolean }
+  ): Promise<{
+    adultVerificationStatus: string;
+    authorityVerificationStatus: string;
+    hostedUrl?: string;
+  }> {
+    try {
+      return await request('/api/parent-portal/verify-identity', {
+        method: 'POST',
+        headers: { 'X-Parent-Session': parentSessionToken },
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const key = Object.keys(invites).find((k) => invites[k].sessionToken === parentSessionToken);
+      if (!key) throw new Error('Parent session expired.');
+      const entry = invites[key];
+      entry.adultVerificationStatus =
+        payload.scenario === 'ADULT_18_PLUS' ? 'VERIFIED_18_PLUS' : 'VERIFICATION_FAILED';
+      entry.authorityVerificationStatus =
+        entry.adultVerificationStatus === 'VERIFIED_18_PLUS' && payload.sandboxAuthorityVerified
+          ? 'SANDBOX_VERIFIED'
+          : 'AWAITING_LEGAL_AUTHORITY_CHECK';
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+      return {
+        adultVerificationStatus: entry.adultVerificationStatus,
+        authorityVerificationStatus: entry.authorityVerificationStatus,
+      };
+    }
+  },
+
+  async submitParentalConsent(
+    parentSessionToken: string,
+    payload: {
+      decision: 'APPROVED' | 'REJECTED';
+      consentVersion: string;
+      acknowledgements: {
+        purposeAndDataCollection: boolean;
+        privacyAndSafetyPolicy: boolean;
+        retentionAndWithdrawalRights: boolean;
+      };
+    }
+  ): Promise<{
+    consentTransactionId: string;
+    consentStatus: 'APPROVED' | 'REJECTED';
+    consentVersion: string;
+    consentTimestamp: string;
+    studentAccountStatus: string;
+    withdrawalToken?: string | null;
+  }> {
+    try {
+      return await request('/api/parent-portal/consent', {
+        method: 'POST',
+        headers: { 'X-Parent-Session': parentSessionToken },
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      if (
+        payload.decision === 'APPROVED' &&
+        (!payload.acknowledgements.purposeAndDataCollection ||
+          !payload.acknowledgements.privacyAndSafetyPolicy ||
+          !payload.acknowledgements.retentionAndWithdrawalRights)
+      ) {
+        throw new Error(
+          'Explicit informed consent requires acknowledging all three TeenStack DPDP disclosures.'
+        );
+      }
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const key = Object.keys(invites).find((k) => invites[k].sessionToken === parentSessionToken);
+      if (!key) throw new Error('Parent session expired.');
+      const entry = invites[key];
+      const txId = `csnt_${Date.now()}`;
+      const wTok = payload.decision === 'APPROVED' ? `wdr_${Date.now()}` : null;
+      const nowIso = new Date().toISOString();
+      entry.consent = {
+        consentTransactionId: txId,
+        consentStatus: payload.decision,
+        consentVersion: payload.consentVersion,
+        consentTimestamp: nowIso,
+        withdrawalToken: wTok,
+      };
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+
+      const users = getStaticUsers();
+      const sIdx = users.findIndex((u) => u.id === entry.studentId);
+      const nextStatus = payload.decision === 'APPROVED' ? 'ACTIVE' : 'PARENT_REJECTED';
+      if (sIdx >= 0) {
+        users[sIdx] = {
+          ...users[sIdx],
+          accountStatus: nextStatus,
+          verificationOverview: {
+            ...(users[sIdx].verificationOverview as StudentVerificationOverview),
+            accountStatus: nextStatus,
+            parentalConsent: {
+              consentTransactionId: txId,
+              status: payload.decision,
+              consentVersion: payload.consentVersion,
+              consentTimestamp: nowIso,
+            },
+          },
+        };
+        saveJson(STATIC_USERS_KEY, users);
+      }
+      return {
+        consentTransactionId: txId,
+        consentStatus: payload.decision,
+        consentVersion: payload.consentVersion,
+        consentTimestamp: nowIso,
+        studentAccountStatus: nextStatus,
+        withdrawalToken: wTok,
+      };
+    }
+  },
+
+  async withdrawParentalConsent(payload: {
+    parentSessionToken?: string;
+    withdrawalToken?: string;
+  }): Promise<{
+    consentTransactionId: string;
+    consentStatus: string;
+    withdrawalTimestamp: string;
+    studentAccountStatus: string;
+  }> {
+    try {
+      return await request('/api/parent-portal/consent/withdraw', {
+        method: 'POST',
+        headers: payload.parentSessionToken
+          ? { 'X-Parent-Session': payload.parentSessionToken }
+          : {},
+        body: JSON.stringify({ withdrawalToken: payload.withdrawalToken }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const invites = loadJson<Record<string, any>>(STATIC_PARENT_INVITES_KEY, {});
+      const key = Object.keys(invites).find(
+        (k) =>
+          (payload.parentSessionToken && invites[k].sessionToken === payload.parentSessionToken) ||
+          (payload.withdrawalToken &&
+            invites[k].consent?.withdrawalToken === payload.withdrawalToken)
+      );
+      if (!key || !invites[key].consent) {
+        throw new Error('Active parental consent record not found.');
+      }
+      const nowIso = new Date().toISOString();
+      invites[key].consent.consentStatus = 'WITHDRAWN';
+      invites[key].consent.withdrawalTimestamp = nowIso;
+      saveJson(STATIC_PARENT_INVITES_KEY, invites);
+
+      const users = getStaticUsers();
+      const sIdx = users.findIndex((u) => u.id === invites[key].studentId);
+      if (sIdx >= 0) {
+        users[sIdx].accountStatus = 'CONSENT_WITHDRAWN_RESTRICTED';
+        saveJson(STATIC_USERS_KEY, users);
+      }
+      return {
+        consentTransactionId: invites[key].consent.consentTransactionId,
+        consentStatus: 'WITHDRAWN',
+        withdrawalTimestamp: nowIso,
+        studentAccountStatus: 'CONSENT_WITHDRAWN_RESTRICTED',
+      };
+    }
+  },
+
+  async requestAccountDeletion() {
+    try {
+      return await request('/api/privacy/delete-account', { method: 'POST', body: '{}' });
+    } catch {
+      return { ok: true };
     }
   },
 };

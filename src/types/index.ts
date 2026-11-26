@@ -2,6 +2,8 @@ export type AppRoute =
   | 'landing'
   | 'login'
   | 'signup'
+  | 'verification'
+  | 'parent-portal'
   | 'onboarding'
   | 'home'
   | 'posts'
@@ -19,6 +21,87 @@ export type NavSection =
   | 'create'
   | 'learn'
   | 'profile';
+
+export type VerifiedAgeBand =
+  | 'UNVERIFIED'
+  | 'UNDER_13'
+  | 'VERIFIED_13_17'
+  | 'VERIFIED_18_PLUS';
+
+export type AccountStatus =
+  | 'PENDING_VERIFICATION'
+  | 'AGE_VERIFIED_AWAITING_PARENT'
+  | 'ACTIVE'
+  | 'REJECTED_UNDER_13'
+  | 'PARENT_REJECTED'
+  | 'VERIFICATION_FAILED'
+  | 'MANUAL_REVIEW'
+  | 'CONSENT_WITHDRAWN_RESTRICTED';
+
+export interface StudentVerificationOverview {
+  accountStatus: AccountStatus;
+  verifiedAgeBand: VerifiedAgeBand;
+  environmentMode: 'live' | 'sandbox_mock';
+  productionActivationDisabled: boolean;
+  ageVerification: {
+    status:
+      | 'PENDING'
+      | 'VERIFIED_13_17'
+      | 'VERIFIED_18_PLUS'
+      | 'UNDER_13'
+      | 'VERIFICATION_FAILED'
+      | 'MANUAL_REVIEW';
+    verifiedAgeBand: VerifiedAgeBand;
+    hostedUrl: string;
+    expiresAt: string;
+    completedAt?: string | null;
+    isSandboxMock: boolean;
+  } | null;
+  parentVerification: {
+    initiated: boolean;
+    maskedParentMobile: string;
+    relationshipType: string;
+    inviteConsumed: boolean;
+    inviteExpired: boolean;
+    adultVerificationStatus: string;
+    authorityVerificationStatus: string;
+  } | null;
+  parentalConsent: {
+    consentTransactionId: string;
+    status: 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+    consentVersion: string;
+    consentTimestamp: string;
+    withdrawalTimestamp?: string | null;
+  } | null;
+}
+
+export interface ParentPortalState {
+  consentVersion: string;
+  environmentMode: 'live' | 'sandbox_mock';
+  productionActivationDisabled: boolean;
+  student: {
+    fullName: string;
+    username: string;
+    verifiedAgeBand: VerifiedAgeBand;
+    accountStatus: AccountStatus;
+  };
+  parentVerification: {
+    id: string;
+    parentName: string;
+    parentEmail: string;
+    parentMobile: string;
+    relationshipType: string;
+    adultVerificationStatus: string;
+    authorityVerificationStatus: string;
+  };
+  consent: {
+    consentTransactionId: string;
+    consentStatus: 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+    consentVersion: string;
+    consentTimestamp: string;
+    withdrawalTimestamp?: string | null;
+  } | null;
+}
 
 export interface PortfolioProject {
   id: string;
@@ -68,6 +151,11 @@ export interface UserAccount {
   phone: string;
   rawPhone?: string;
   dob: string;
+  declaredDob?: string;
+  verifiedAgeBand?: VerifiedAgeBand;
+  accountStatus?: AccountStatus;
+  role?: 'student' | 'parent' | 'compliance_admin';
+  verificationOverview?: StudentVerificationOverview;
   age: number;
   marketingOptIn: boolean;
   onboardingStep: number;
@@ -102,7 +190,13 @@ export interface FeedPost {
     | 'certificate';
   title: string;
   content: string;
-  mediaType: 'none' | 'landscape_illustration' | 'code_preview' | 'certificate_card' | 'video_showcase' | 'image';
+  mediaType:
+    | 'none'
+    | 'landscape_illustration'
+    | 'code_preview'
+    | 'certificate_card'
+    | 'video_showcase'
+    | 'image';
   mediaMeta: Record<string, any>;
   skillTags: string[];
   likesCount: number;
