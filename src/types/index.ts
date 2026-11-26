@@ -91,7 +91,15 @@ export interface FeedPost {
   authorHandle: string;
   authorSchool: string;
   authorAvatar: string;
-  category: 'project' | 'achievement' | 'tutorial' | 'video' | 'certificate' | 'post';
+  category:
+    | 'story'
+    | 'post'
+    | 'reel'
+    | 'project'
+    | 'achievement'
+    | 'tutorial'
+    | 'video'
+    | 'certificate';
   title: string;
   content: string;
   mediaType: 'none' | 'landscape_illustration' | 'code_preview' | 'certificate_card' | 'video_showcase' | 'image';

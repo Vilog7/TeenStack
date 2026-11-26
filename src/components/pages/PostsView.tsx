@@ -26,10 +26,10 @@ interface PostsViewProps {
 
 const CATEGORIES = [
   { id: 'all', label: 'All Discoveries' },
+  { id: 'reel', label: 'Reels & Video' },
   { id: 'project', label: 'Projects' },
   { id: 'achievement', label: 'Achievements' },
   { id: 'tutorial', label: 'Study Guides' },
-  { id: 'video', label: 'Video Demos' },
   { id: 'saved', label: 'Saved Bookmarks' },
 ] as const;
 
@@ -55,8 +55,17 @@ export function PostsView({
   const [compactGrid, setCompactGrid] = useState(false);
 
   const filtered = posts.filter((p) => {
+    if (p.category === 'story') return false;
     if (category === 'saved' && !savedPostIds.has(p.id)) return false;
-    if (category !== 'all' && category !== 'saved' && p.category !== category) return false;
+    if (category === 'reel' && p.category !== 'reel' && p.category !== 'video') return false;
+    if (
+      category !== 'all' &&
+      category !== 'saved' &&
+      category !== 'reel' &&
+      p.category !== category
+    ) {
+      return false;
+    }
     if (activeSkillFilter) {
       const needle = activeSkillFilter.toLowerCase();
       const hay = `${p.title} ${p.content} ${p.skillTags.join(' ')}`.toLowerCase();

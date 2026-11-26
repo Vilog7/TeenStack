@@ -13,9 +13,14 @@ import {
   Subtitles,
   Check,
   Sparkles,
+  Clapperboard,
+  AtSign,
+  ExternalLink,
+  Link2,
 } from 'lucide-react';
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { SolarisArtwork } from '../ui/SolarisArtwork';
+import { PEER_STUDENTS } from '../../data/catalog';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
 import type { FeedPost } from '../../types';
 
@@ -46,6 +51,16 @@ function formatTimeAgo(iso: string): string {
   return `${Math.round(hrs / 24)}d`;
 }
 
+function formatLinkLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+    return `${parsed.hostname.replace(/^www\./, '')}${path}`.slice(0, 46);
+  } catch {
+    return url.replace(/^https?:\/\//i, '').slice(0, 46);
+  }
+}
+
 export function PostCard({
   post,
   liked,
@@ -59,12 +74,25 @@ export function PostCard({
   const [copied, setCopied] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
+  const [showTaggedPopover, setShowTaggedPopover] = useState(false);
   const [heartBurst, setHeartBurst] = useState(false);
   const [quickComment, setQuickComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
   const lastTapRef = useRef<number>(0);
 
   const cleanHandle = post.authorHandle.replace(/^@/, '');
+  const isReel = post.category === 'reel' || post.mediaMeta?.createType === 'reel';
+  const topicLabel: string = post.mediaMeta?.topic || '';
+  const taggedPeople: string[] = Array.isArray(post.mediaMeta?.taggedPeople)
+    ? post.mediaMeta.taggedPeople.slice(0, 10)
+    : [];
+  const rawAttachedLink: string = post.mediaMeta?.attachedLink || post.mediaMeta?.liveUrl || '';
+  const attachedLink = rawAttachedLink
+    ? /^https?:\/\//i.test(rawAttachedLink)
+      ? rawAttachedLink
+      : `https://${rawAttachedLink}`
+    : '';
 
   const handleDoubleTapLike = () => {
     if (!liked) onToggleLike(post.id);
@@ -82,9 +110,35 @@ export function PostCard({
     }
   };
 
+  const handleToggleReelPlay = () => {
+    if (videoElRef.current) {
+      if (videoElRef.current.paused) {
+        videoElRef.current.play().catch(() => {});
+        setVideoPlaying(true);
+      } else {
+        videoElRef.current.pause();
+        setVideoPlaying(false);
+      }
+    } else {
+      setVideoPlaying((v) => !v);
+    }
+  };
+
+  const handleInspectHandle = (handle: string) => {
+    const clean = handle.replace(/^@/, '').toLowerCase();
+    const matched = PEER_STUDENTS.find(
+      (p) => p.handle.replace(/^@/, '').toLowerCase() === clean
+    );
+    if (matched) {
+      onInspectAuthor(matched.id, matched.name, matched.avatarPreset);
+    } else {
+      onInspectAuthor(`peer-${clean}`, clean, 'violet-coder');
+    }
+  };
+
   const handleShare = () => {
     setCopied(true);
-    navigator.clipboard?.writeText(`https://teenstack.dev/posts/${post.id}`).catch(() => {});
+    navigator.clipboard?.writeText(attachedLink || `https://teenstack.dev/posts/${post.id}`).catch(() => {});
     setTimeout(() => setCopied(false), 1600);
   };
 
@@ -101,7 +155,9 @@ export function PostCard({
   };
 
   const fallbackPhoto = assetUrl(
-    FALLBACK_POST_IMAGES[post.authorId] || 'images/teens/astrophysics-maker.jpg'
+    post.mediaMeta?.imageUrl ||
+      FALLBACK_POST_IMAGES[post.authorId] ||
+      'images/teens/astrophysics-maker.jpg'
   );
 
   return (
@@ -110,14 +166,14 @@ export function PostCard({
       transition={SPRINGS.morph}
       className="border-b border-white/10 bg-[#080910] pb-4 sm:rounded-2xl sm:border sm:border-white/10 sm:bg-[#0B0E1A]"
     >
-      {/* 1. INSTAGRAM HEADER: Story-Ring Avatar + Username + Time + More */}
+      {/* 1. INSTAGRAM HEADER: Story-Ring Avatar + Username + Reel/Topic Badge + Time + More */}
       <div className="flex items-center justify-between px-3.5 py-3">
         <button
           type="button"
           onClick={() => onInspectAuthor(post.authorId, post.authorName, post.authorAvatar)}
-          className="flex items-center gap-2.5 text-left"
+          className="flex min-w-0 items-center gap-2.5 text-left"
         >
-          <span className="rounded-full bg-gradient-to-tr from-[#743BFF] via-[#258BFF] to-[#27D9D0] p-[2px]">
+          <span className="shrink-0 rounded-full bg-gradient-to-tr from-[#743BFF] via-[#258BFF] to-[#27D9D0] p-[2px]">
             <span className="block rounded-full bg-[#080910] p-[1.5px]">
               <StudentAvatar
                 presetOrUrl={post.authorAvatar}
@@ -127,14 +183,22 @@ export function PostCard({
               />
             </span>
           </span>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-white hover:text-[#27D9D0] sm:text-[13px]">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="truncate text-xs font-bold text-white hover:text-[#27D9D0] sm:text-[13px]">
                 {cleanHandle}
               </span>
+              {isReel && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#743BFF]/25 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#27D9D0]">
+                  <Clapperboard className="h-2.5 w-2.5" />
+                  Reel
+                </span>
+              )}
               <span className="text-xs text-[#A5A9BC]">• {formatTimeAgo(post.createdAt)}</span>
             </div>
-            <div className="text-[11px] text-[#A5A9BC]">{post.authorSchool}</div>
+            <div className="truncate text-[11px] text-[#A5A9BC]">
+              {topicLabel ? `${topicLabel} · ${post.authorSchool}` : post.authorSchool}
+            </div>
           </div>
         </button>
 
@@ -199,22 +263,34 @@ export function PostCard({
         )}
 
         {post.mediaType === 'video_showcase' && (
-          <div className="relative h-80 w-full bg-[#080910]">
-            <img
-              src={fallbackPhoto}
-              alt={post.title || 'Video walkthrough preview'}
-              className="h-full w-full object-cover opacity-80"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#080910] via-transparent to-[#080910]/40" />
+          <div className="relative h-96 w-full bg-[#080910]">
+            {post.mediaMeta?.videoUrl ? (
+              <video
+                ref={videoElRef}
+                src={post.mediaMeta.videoUrl}
+                loop
+                playsInline
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <img
+                src={fallbackPhoto}
+                alt={post.title || 'Reel preview'}
+                className={`h-full w-full object-cover transition-transform duration-700 ${
+                  videoPlaying ? 'scale-105 opacity-95' : 'opacity-85'
+                }`}
+              />
+            )}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#080910] via-transparent to-[#080910]/40" />
             <div className="absolute inset-x-4 bottom-4 space-y-2.5">
               <div className="flex items-center justify-between">
                 <button
                   type="button"
-                  onClick={() => setVideoPlaying((v) => !v)}
+                  onClick={handleToggleReelPlay}
                   className="inline-flex items-center gap-2 rounded-full bg-[#743BFF] px-4 py-2 text-xs font-semibold text-white shadow-lg"
                 >
                   {videoPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                  <span>{videoPlaying ? 'Playing Reel' : 'Play Walkthrough'}</span>
+                  <span>{videoPlaying ? 'Playing Reel' : isReel ? 'Play Reel' : 'Play Walkthrough'}</span>
                 </button>
                 <button
                   type="button"
@@ -230,8 +306,8 @@ export function PostCard({
                 </button>
               </div>
               {captionsOn && (
-                <p className="rounded-xl bg-[#080910]/85 px-3 py-1.5 text-center text-xs text-white">
-                  “[CC] Keyboard-first tactile focus states with zero mouse dependency.”
+                <p className=" line-clamp-2 rounded-xl bg-[#080910]/85 px-3 py-1.5 text-center text-xs text-white">
+                  “[CC] {post.content.slice(0, 96)}{post.content.length > 96 ? '…' : ''}”
                 </p>
               )}
             </div>
@@ -241,7 +317,7 @@ export function PostCard({
         {post.mediaType === 'image' && post.mediaMeta?.imageUrl && (
           <img
             src={assetUrl(post.mediaMeta.imageUrl)}
-            alt={post.title || 'Student project'}
+            alt={post.title || 'Student post'}
             className="max-h-[470px] w-full object-cover"
           />
         )}
@@ -254,16 +330,56 @@ export function PostCard({
               className="h-full w-full object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-[#080910] via-[#080910]/35 to-transparent" />
-            {post.title && (
+            {(topicLabel || post.title) && (
               <div className="absolute inset-x-4 bottom-4">
                 <span className="rounded-full bg-[#743BFF]/85 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-                  {post.category}
+                  {topicLabel || post.category}
                 </span>
-                <h3 className="mt-1.5 font-heading text-base font-bold text-white drop-shadow sm:text-lg">
-                  {post.title}
-                </h3>
+                {post.title && post.title !== topicLabel && (
+                  <h3 className="mt-1.5 font-heading text-base font-bold text-white drop-shadow sm:text-lg">
+                    {post.title}
+                  </h3>
+                )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Instagram Tagged People Badge Overlay on Media */}
+        {taggedPeople.length > 0 && (
+          <div className="absolute top-3 left-3 z-10">
+            <button
+              type="button"
+              onClick={() => setShowTaggedPopover((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-[#080910]/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-md hover:border-[#27D9D0]"
+            >
+              <AtSign className="h-3 w-3 text-[#27D9D0]" />
+              <span>
+                {taggedPeople.length} {taggedPeople.length === 1 ? 'person' : 'people'}
+              </span>
+            </button>
+
+            <AnimatePresence>
+              {showTaggedPopover && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.95 }}
+                  className="mt-1.5 flex max-w-[260px] flex-wrap gap-1.5 rounded-2xl border border-white/15 bg-[#080910]/95 p-2.5 shadow-xl backdrop-blur-md"
+                >
+                  {taggedPeople.map((handle) => (
+                    <button
+                      key={handle}
+                      type="button"
+                      onClick={() => handleInspectHandle(handle)}
+                      className="rounded-full bg-[#258BFF]/20 px-2.5 py-0.5 text-[11px] font-semibold text-[#27D9D0] hover:bg-[#258BFF]/35"
+                    >
+                      {handle}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
@@ -341,9 +457,16 @@ export function PostCard({
           </motion.button>
         </div>
 
-        {/* Likes Count */}
-        <div className="mt-2.5 text-xs font-bold text-white sm:text-[13px]">
-          {post.likesCount.toLocaleString()} likes
+        {/* Likes Count + Optional Topic Pill */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-white sm:text-[13px]">
+            {post.likesCount.toLocaleString()} likes
+          </span>
+          {topicLabel && (
+            <span className="rounded-full border border-[#743BFF]/40 bg-[#743BFF]/15 px-2.5 py-0.5 text-[11px] font-semibold text-[#27D9D0]">
+              {topicLabel}
+            </span>
+          )}
         </div>
 
         {/* Inline Username + Caption + Hashtags */}
@@ -355,7 +478,7 @@ export function PostCard({
           >
             {cleanHandle}
           </button>
-          {post.title && post.mediaType !== 'none' && (
+          {post.title && post.title !== topicLabel && post.mediaType !== 'none' && (
             <span className="mr-1.5 font-semibold text-white">{post.title} —</span>
           )}
           <span className="text-[#D4D7E5]">{post.content}</span>
@@ -370,12 +493,42 @@ export function PostCard({
           )}
         </div>
 
+        {/* @Tagged People Row */}
+        {taggedPeople.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {taggedPeople.map((handle) => (
+              <button
+                key={handle}
+                type="button"
+                onClick={() => handleInspectHandle(handle)}
+                className="inline-flex items-center rounded-full border border-[#258BFF]/30 bg-[#258BFF]/12 px-2 py-0.5 text-[11px] font-semibold text-[#27D9D0] hover:border-[#27D9D0]"
+              >
+                {handle}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Attached Link Pill */}
+        {attachedLink && (
+          <a
+            href={attachedLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2.5 inline-flex max-w-full items-center gap-2 rounded-xl border border-[#258BFF]/35 bg-[#111426] px-3 py-1.5 text-xs font-semibold text-[#27D9D0] transition-colors hover:border-[#27D9D0] hover:text-white"
+          >
+            <Link2 className="h-3.5 w-3.5 shrink-0 text-[#258BFF]" />
+            <span className="truncate">{formatLinkLabel(attachedLink)}</span>
+            <ExternalLink className="h-3 w-3 shrink-0 opacity-80" />
+          </a>
+        )}
+
         {/* View Comments Trigger */}
         {post.comments.length > 0 && (
           <button
             type="button"
             onClick={() => onOpenPost(post)}
-            className="mt-1.5 block text-xs text-[#A5A9BC] hover:text-white"
+            className="mt-2 block text-xs text-[#A5A9BC] hover:text-white"
           >
             View all {post.comments.length} {post.comments.length === 1 ? 'comment' : 'comments'}
           </button>

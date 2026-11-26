@@ -1,6 +1,6 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, Heart, Bookmark } from 'lucide-react';
+import { X, Send, Heart, Bookmark, Link2, ExternalLink, AtSign, Clapperboard } from 'lucide-react';
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { SolarisArtwork } from '../ui/SolarisArtwork';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
@@ -49,6 +49,18 @@ export function ExpandedPostModal({
     }
   };
 
+  const topicLabel: string = post?.mediaMeta?.topic || '';
+  const isReel = post?.category === 'reel' || post?.mediaMeta?.createType === 'reel';
+  const taggedPeople: string[] = Array.isArray(post?.mediaMeta?.taggedPeople)
+    ? post!.mediaMeta.taggedPeople.slice(0, 10)
+    : [];
+  const rawLink: string = post?.mediaMeta?.attachedLink || post?.mediaMeta?.liveUrl || '';
+  const attachedLink = rawLink
+    ? /^https?:\/\//i.test(rawLink)
+      ? rawLink
+      : `https://${rawLink}`
+    : '';
+
   return (
     <AnimatePresence>
       {post && (
@@ -79,7 +91,20 @@ export function ExpandedPostModal({
               <div className="flex items-center gap-3">
                 <StudentAvatar presetOrUrl={post.authorAvatar} name={post.authorName} size="md" online />
                 <div>
-                  <div className="font-heading text-base font-bold text-white">{post.authorName}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-heading text-base font-bold text-white">{post.authorName}</span>
+                    {isReel && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-[#743BFF]/25 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#27D9D0]">
+                        <Clapperboard className="h-3 w-3" />
+                        Reel
+                      </span>
+                    )}
+                    {topicLabel && (
+                      <span className="rounded-full border border-[#743BFF]/40 bg-[#743BFF]/15 px-2.5 py-0.5 text-[11px] font-semibold text-[#27D9D0]">
+                        {topicLabel}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-[#A5A9BC]">
                     {post.authorHandle} · {post.authorSchool}
                   </div>
@@ -97,9 +122,9 @@ export function ExpandedPostModal({
             </div>
 
             <h1 id="expanded-post-heading" className="mt-4 font-heading text-xl font-bold text-white sm:text-2xl">
-              {post.title || `${post.authorName}'s Update`}
+              {post.title || topicLabel || `${post.authorName}'s ${isReel ? 'Reel' : 'Post'}`}
             </h1>
-            <p className="mt-2 text-sm leading-relaxed text-[#A5A9BC] sm:text-base">{post.content}</p>
+            <p className="mt-2 text-sm leading-relaxed text-[#D4D7E5] sm:text-base">{post.content}</p>
 
             {post.mediaType === 'landscape_illustration' && (
               <div className="mt-4">
@@ -107,13 +132,58 @@ export function ExpandedPostModal({
               </div>
             )}
 
-            {post.mediaType === 'image' && post.mediaMeta?.imageUrl && (
+            {post.mediaMeta?.videoUrl && (
+              <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black">
+                <video
+                  src={post.mediaMeta.videoUrl}
+                  controls
+                  playsInline
+                  className="max-h-96 w-full object-contain"
+                />
+              </div>
+            )}
+
+            {!post.mediaMeta?.videoUrl && post.mediaMeta?.imageUrl && (
               <div className="mt-4 overflow-hidden rounded-2xl border border-white/10">
                 <img
                   src={assetUrl(post.mediaMeta.imageUrl)}
                   alt={post.title || post.authorName}
                   className="max-h-96 w-full object-cover"
                 />
+              </div>
+            )}
+
+            {/* Tagged People */}
+            {taggedPeople.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#A5A9BC]">
+                  <AtSign className="h-3.5 w-3.5 text-[#27D9D0]" />
+                  Tagged:
+                </span>
+                {taggedPeople.map((handle) => (
+                  <span
+                    key={handle}
+                    className="rounded-full border border-[#258BFF]/35 bg-[#258BFF]/15 px-2.5 py-0.5 text-xs font-semibold text-[#27D9D0]"
+                  >
+                    {handle}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Attached Link */}
+            {attachedLink && (
+              <div className="mt-3">
+                <a
+                  href={attachedLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-full items-center gap-2 rounded-xl border border-[#258BFF]/40 bg-[#111426] px-3.5 py-2 text-xs font-semibold text-[#27D9D0] hover:border-[#27D9D0] hover:text-white"
+                >
+                  <Link2 className="h-3.5 w-3.5 shrink-0 text-[#258BFF]" />
+                  <span className="truncate">{attachedLink}</span>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                </a>
               </div>
             )}
 

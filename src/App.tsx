@@ -69,6 +69,7 @@ export function App() {
   const [expandedPost, setExpandedPost] = useState<FeedPost | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [openStorySignal, setOpenStorySignal] = useState(0);
   const [activeSkillFilter, setActiveSkillFilter] = useState('');
   const [inspectingPeer, setInspectingPeer] = useState<PeerStudent | null>(null);
   const [activeThreadId, setActiveThreadId] = useState('thread-maya');
@@ -222,7 +223,10 @@ export function App() {
   }) => {
     const res = await api.createPost(payload);
     setPosts((prev) => [res.post, ...prev]);
-    if (route === 'create') {
+    if (payload.category === 'story') {
+      setOpenStorySignal((n) => n + 1);
+      navigate('home');
+    } else if (route === 'create') {
       navigate('home');
     }
   };
@@ -366,6 +370,7 @@ export function App() {
                     likedPostIds={likedPostIds}
                     savedPostIds={savedPostIds}
                     connectedIds={connectedIds}
+                    openStorySignal={openStorySignal}
                     onOpenSearch={() => setSearchOpen(true)}
                     onToggleLike={handleToggleLike}
                     onToggleSave={handleToggleSave}

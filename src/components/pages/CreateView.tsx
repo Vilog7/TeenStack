@@ -1,21 +1,27 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useState, useMemo, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  FileText,
-  Rocket,
-  Trophy,
-  Award,
-  Upload,
   Sparkles,
+  Image as ImageIcon,
+  Clapperboard,
+  CircleFadingPlus,
+  Upload,
+  AtSign,
+  Link2,
+  Hash,
   Check,
   X,
   Plus,
+  ExternalLink,
 } from 'lucide-react';
-import { SolarisArtwork } from '../ui/SolarisArtwork';
-import { SPRINGS } from '../../lib/tokens';
+import { StudentAvatar } from '../ui/StudentAvatar';
+import { PEER_STUDENTS } from '../../data/catalog';
+import { SPRINGS, assetUrl } from '../../lib/tokens';
 import type { FeedPost, UserAccount } from '../../types';
 
-type CreateMode = 'post' | 'project' | 'achievement' | 'certificate';
+export type CreateMode = 'story' | 'post' | 'reel';
+
+const MAX_TAGGED_PEOPLE = 10;
 
 interface CreateStudioProps {
   user: UserAccount;
@@ -31,12 +37,63 @@ interface CreateStudioProps {
   onCloseModal?: () => void;
 }
 
-const MODES: { id: CreateMode; label: string; desc: string; icon: typeof Rocket }[] = [
-  { id: 'post', label: 'Create Post', desc: 'Study note, question, or update', icon: FileText },
-  { id: 'project', label: 'Upload Project', desc: 'Demo showcase, repo & visuals', icon: Rocket },
-  { id: 'achievement', label: 'Share Achievement', desc: 'Hackathon win or milestone', icon: Trophy },
-  { id: 'certificate', label: 'Upload Certificate', desc: 'Verified course or award badge', icon: Award },
+const CREATE_MODES: {
+  id: CreateMode;
+  label: string;
+  desc: string;
+  icon: typeof ImageIcon;
+}[] = [
+  {
+    id: 'story',
+    label: 'Story',
+    desc: 'Quick 24h highlight ring',
+    icon: CircleFadingPlus,
+  },
+  {
+    id: 'post',
+    label: 'Post',
+    desc: 'Feed photo or build update',
+    icon: ImageIcon,
+  },
+  {
+    id: 'reel',
+    label: 'Reel',
+    desc: 'Short vertical demo clip',
+    icon: Clapperboard,
+  },
 ];
+
+const QUICK_TOPICS = [
+  'Robotics',
+  'Web Dev',
+  'AI & ML',
+  'UI/UX Design',
+  'Hackathon',
+  'Campus Life',
+];
+
+const SAMPLE_VISUALS = [
+  { label: 'Shader Studio', path: 'images/posts/shader-desk.jpg' },
+  { label: 'Lake Rover', path: 'images/posts/rover-lake.jpg' },
+  { label: 'Hackathon Win', path: 'images/posts/hackathon-win.jpg' },
+  { label: 'AI Lab', path: 'images/teens/ai-coder.jpg' },
+];
+
+function normalizeHandle(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/^@+/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_.]/g, '');
+  return cleaned ? `@${cleaned.slice(0, 24)}` : '';
+}
+
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
 
 export function CreateView({
   user,
@@ -44,25 +101,107 @@ export function CreateView({
   compactModal = false,
   onCloseModal,
 }: CreateStudioProps) {
-  const [mode, setMode] = useState<CreateMode>('project');
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [issuerOrLink, setIssuerOrLink] = useState('');
-  const [codeSnippet, setCodeSnippet] = useState('');
-  const [attachSolarisPreview, setAttachSolarisPreview] = useState(false);
-  const [uploadedImage, setUploadedImage] = useState('');
-  const [tags, setTags] = useState<string[]>(user.profile.skills.slice(0, 3));
-  const [tagInput, setTagInput] = useState('');
+  const [mode, setMode] = useState<CreateMode>('post');
+  const [topic, setTopic] = useState('');
+  const [caption, setCaption] = useState('');
+  const [taggedPeople, setTaggedPeople] = useState<string[]>([]);
+  const [mentionInput, setMentionInput] = useState('');
+  const [tagLimitNotice, setTagLimitNotice] = useState('');
+  const [attachedLink, setAttachedLink] = useState('');
+  const [uploadedMedia, setUploadedMedia] = useState('');
+  const [uploadedIsVideo, setUploadedIsVideo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
-  const handleImagePick = (e: ChangeEvent<HTMLInputElement>) => {
+  // Extract active @query if the user is currently typing @something at the end of the caption
+  const inlineCaptionMentionQuery = useMemo(() => {
+    const match = caption.match(/(?:^|\s)@([a-zA-Z0-9_.]*)$/);
+    return match ? match[1].toLowerCase() : null;
+  }, [caption]);
+
+  // Filter peer suggestions for the @ tagger input
+  const filteredPeers = useMemo(() => {
+    const needle = mentionInput.replace(/^@+/, '').trim().toLowerCase();
+    return PEER_STUDENTS.filter((peer) => {
+      const normalized = normalizeHandle(peer.handle);
+      if (taggedPeople.includes(normalized)) return false;
+      if (!needle) return true;
+      return (
+        normalized.includes(needle) ||
+        peer.name.toLowerCase().includes(needle)
+      );
+    });
+  }, [mentionInput, taggedPeople]);
+
+  const inlineCaptionSuggestions = useMemo(() => {
+    if (inlineCaptionMentionQuery === null) return [];
+    return PEER_STUDENTS.filter((peer) => {
+      const clean = peer.handle.replace(/^@/, '').toLowerCase();
+      return (
+        clean.includes(inlineCaptionMentionQuery) ||
+        peer.name.toLowerCase().includes(inlineCaptionMentionQuery)
+      );
+    }).slice(0, 4);
+  }, [inlineCaptionMentionQuery]);
+
+  const addTaggedPerson = (rawHandle: string): boolean => {
+    const normalized = normalizeHandle(rawHandle);
+    if (!normalized) return false;
+    if (taggedPeople.includes(normalized)) {
+      setMentionInput('');
+      setTagLimitNotice('');
+      return true;
+    }
+    if (taggedPeople.length >= MAX_TAGGED_PEOPLE) {
+      setTagLimitNotice(`You can tag at most ${MAX_TAGGED_PEOPLE} people on a ${mode}.`);
+      return false;
+    }
+    setTaggedPeople((prev) => [...prev, normalized]);
+    setMentionInput('');
+    setTagLimitNotice('');
+    return true;
+  };
+
+  const removeTaggedPerson = (handle: string) => {
+    setTaggedPeople((prev) => prev.filter((h) => h !== handle));
+    setTagLimitNotice('');
+  };
+
+  const handleMentionKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if ((e.key === 'Enter' || e.key === ',' || e.key === ' ') && mentionInput.trim()) {
+      e.preventDefault();
+      addTaggedPerson(mentionInput);
+    } else if (e.key === 'Backspace' && !mentionInput && taggedPeople.length > 0) {
+      removeTaggedPerson(taggedPeople[taggedPeople.length - 1]);
+    }
+  };
+
+  const handlePickInlineCaptionPeer = (peerHandle: string) => {
+    const normalized = normalizeHandle(peerHandle);
+    if (!normalized) return;
+    if (!taggedPeople.includes(normalized) && taggedPeople.length >= MAX_TAGGED_PEOPLE) {
+      setTagLimitNotice(`Maximum of ${MAX_TAGGED_PEOPLE} @tags reached.`);
+      return;
+    }
+    setCaption((prev) => prev.replace(/(?:^|\s)@[a-zA-Z0-9_.]*$/, (prefix) => {
+      const leadingSpace = prefix.startsWith(' ') ? ' ' : '';
+      return `${leadingSpace}${normalized} `;
+    }));
+    if (!taggedPeople.includes(normalized)) {
+      setTaggedPeople((prev) => [...prev, normalized]);
+    }
+    setTagLimitNotice('');
+  };
+
+  const handleMediaUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const isVid = file.type.startsWith('video/');
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
-        setUploadedImage(reader.result);
-        setAttachSolarisPreview(false);
+        setUploadedMedia(reader.result);
+        setUploadedIsVideo(isVid);
       }
     };
     reader.readAsDataURL(file);
@@ -70,90 +209,133 @@ export function CreateView({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!content.trim() && !title.trim()) return;
+    setFormError('');
+
+    const trimmedTopic = topic.trim();
+    const trimmedCaption = caption.trim();
+
+    if (!trimmedTopic && !trimmedCaption) {
+      setFormError('Please enter a topic or a caption before publishing.');
+      return;
+    }
+
+    // Collect any inline @handles typed directly into the caption as well
+    const inlineMatches = trimmedCaption.match(/@[a-zA-Z0-9_.]{2,24}/g) || [];
+    const mergedTags = [...taggedPeople];
+    for (const raw of inlineMatches) {
+      const norm = normalizeHandle(raw);
+      if (norm && !mergedTags.includes(norm)) {
+        mergedTags.push(norm);
+      }
+    }
+
+    if (mergedTags.length > MAX_TAGGED_PEOPLE) {
+      setFormError(`You can tag a maximum of ${MAX_TAGGED_PEOPLE} people using @ (currently ${mergedTags.length}).`);
+      return;
+    }
+
+    const finalLink = normalizeUrl(attachedLink);
+    if (finalLink) {
+      try {
+        new URL(finalLink);
+      } catch {
+        setFormError('Please enter a valid link (for example, https://github.com/your-project).');
+        return;
+      }
+    }
+
     setSubmitting(true);
-
     try {
-      let category: FeedPost['category'] = 'post';
       let mediaType: FeedPost['mediaType'] = 'none';
-      let mediaMeta: Record<string, any> = {};
+      const defaultVisual =
+        mode === 'reel'
+          ? 'images/teens/ai-coder.jpg'
+          : mode === 'story'
+          ? 'images/posts/hackathon-win.jpg'
+          : '';
 
-      if (mode === 'project') {
-        category = 'project';
-        if (uploadedImage) {
+      const mediaMeta: Record<string, any> = {
+        createType: mode,
+        topic: trimmedTopic,
+        taggedPeople: mergedTags,
+        attachedLink: finalLink,
+      };
+
+      if (mode === 'reel') {
+        mediaType = 'video_showcase';
+        if (uploadedMedia) {
+          if (uploadedIsVideo) mediaMeta.videoUrl = uploadedMedia;
+          else mediaMeta.imageUrl = uploadedMedia;
+        } else {
+          mediaMeta.imageUrl = defaultVisual;
+        }
+      } else if (uploadedMedia) {
+        if (uploadedIsVideo) {
+          mediaType = 'video_showcase';
+          mediaMeta.videoUrl = uploadedMedia;
+        } else {
           mediaType = 'image';
-          mediaMeta = { imageUrl: uploadedImage, liveUrl: issuerOrLink };
-        } else if (attachSolarisPreview) {
-          mediaType = 'landscape_illustration';
-          mediaMeta = { liveUrl: issuerOrLink || 'demo.teenstack.dev' };
-        } else if (codeSnippet.trim()) {
-          mediaType = 'code_preview';
-          mediaMeta = { language: 'typescript', snippet: codeSnippet.trim(), readTime: 'Project snippet' };
+          mediaMeta.imageUrl = uploadedMedia;
         }
-      } else if (mode === 'achievement') {
-        category = 'achievement';
-        mediaType = 'certificate_card';
-        mediaMeta = {
-          award: title || 'Student Milestone',
-          issuer: issuerOrLink || 'TeenStack Community',
-          verified: true,
-        };
-      } else if (mode === 'certificate') {
-        category = 'certificate';
-        mediaType = 'certificate_card';
-        mediaMeta = {
-          award: title || 'Verified Course Credential',
-          issuer: issuerOrLink || 'TeenStack Learning Track',
-          verified: true,
-        };
-      } else {
-        category = codeSnippet.trim() ? 'tutorial' : 'post';
-        if (codeSnippet.trim()) {
-          mediaType = 'code_preview';
-          mediaMeta = { language: 'code', snippet: codeSnippet.trim(), readTime: 'Study note' };
-        }
+      } else if (mode === 'story') {
+        mediaType = 'image';
+        mediaMeta.imageUrl = defaultVisual;
       }
 
+      const derivedSkillTags = trimmedTopic
+        ? [trimmedTopic.replace(/\s+/g, '')]
+        : user.profile.skills.slice(0, 2);
+
       await onPublish({
-        category,
-        title: title.trim(),
-        content: content.trim() || title.trim(),
+        category: mode,
+        title: trimmedTopic,
+        content: trimmedCaption || trimmedTopic,
         mediaType,
         mediaMeta,
-        skillTags: tags,
+        skillTags: derivedSkillTags,
       });
 
-      setTitle('');
-      setContent('');
-      setIssuerOrLink('');
-      setCodeSnippet('');
-      setUploadedImage('');
+      setTopic('');
+      setCaption('');
+      setTaggedPeople([]);
+      setMentionInput('');
+      setAttachedLink('');
+      setUploadedMedia('');
+      setUploadedIsVideo(false);
+      setTagLimitNotice('');
       if (onCloseModal) onCloseModal();
     } finally {
       setSubmitting(false);
     }
   };
 
+  const activeModeObj = CREATE_MODES.find((m) => m.id === mode)!;
+
   return (
     <motion.div
       layout
       transition={SPRINGS.morph}
-      className={compactModal ? 'space-y-4' : 'ts-surface-elevated rounded-3xl p-5 sm:p-7 space-y-6'}
+      className={
+        compactModal
+          ? 'space-y-4'
+          : 'ts-surface-elevated mx-auto max-w-2xl space-y-6 rounded-3xl p-4 sm:p-7'
+      }
     >
+      {/* Studio Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#27D9D0]">
             <Sparkles className="h-3.5 w-3.5" />
-            <span>TeenStack Creation Studio</span>
+            <span>Create on TeenStack</span>
           </span>
           <h1 className="mt-1 font-heading text-xl font-bold text-white sm:text-2xl">
-            Publish your work to the student network
+            Share a Story, Post, or Reel
           </h1>
         </div>
         {compactModal && onCloseModal && (
           <button
             type="button"
-            aria-label="Close quick create"
+            aria-label="Close create modal"
             onClick={onCloseModal}
             className="rounded-xl border border-white/12 p-2 text-[#A5A9BC] hover:text-white"
           >
@@ -162,17 +344,26 @@ export function CreateView({
         )}
       </div>
 
-      {/* 4 Morphing Mode Selector Cards */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        {MODES.map((m) => {
+      {/* Step 1: 3 Morphing Options — Story | Post | Reel */}
+      <div
+        role="tablist"
+        aria-label="Choose format: Story, Post, or Reel"
+        className="grid grid-cols-3 gap-2.5"
+      >
+        {CREATE_MODES.map((m) => {
           const Icon = m.icon;
           const active = mode === m.id;
           return (
             <button
               key={m.id}
+              role="tab"
               type="button"
-              onClick={() => setMode(m.id)}
-              className={`relative rounded-2xl border p-3 text-left transition-colors ${
+              aria-selected={active}
+              onClick={() => {
+                setMode(m.id);
+                setFormError('');
+              }}
+              className={`relative rounded-2xl border p-3 text-left transition-colors sm:p-3.5 ${
                 active
                   ? 'border-[#743BFF] text-white'
                   : 'border-white/10 bg-[#080910]/65 text-[#A5A9BC] hover:text-white'
@@ -180,211 +371,357 @@ export function CreateView({
             >
               {active && (
                 <motion.div
-                  layoutId={compactModal ? 'modal-create-tab' : 'page-create-tab'}
+                  layoutId={compactModal ? 'modal-create-3mode' : 'page-create-3mode'}
                   transition={SPRINGS.pill}
-                  className="absolute inset-0 -z-10 rounded-2xl bg-gradient-to-br from-[#743BFF]/30 to-[#258BFF]/18"
+                  className="absolute inset-0 -z-10 rounded-2xl bg-gradient-to-br from-[#743BFF]/35 via-[#258BFF]/20 to-[#27D9D0]/15"
                 />
               )}
-              <Icon className={`h-4 w-4 ${active ? 'text-[#27D9D0]' : 'text-[#743BFF]'}`} />
-              <div className="mt-2 font-heading text-xs font-bold text-white sm:text-sm">{m.label}</div>
-              <div className="mt-0.5 hidden text-[11px] text-[#A5A9BC] sm:block">{m.desc}</div>
+              <div className="flex items-center gap-2">
+                <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-[#27D9D0]' : 'text-[#743BFF]'}`} />
+                <span className="font-heading text-sm font-bold text-white sm:text-base">
+                  {m.label}
+                </span>
+              </div>
+              <div className="mt-1 hidden text-[11px] text-[#A5A9BC] sm:block">{m.desc}</div>
             </button>
           );
         })}
       </div>
 
-      {/* Morphing Dynamic Form */}
+      {/* Step 2: Topic or Caption, @Tag People (max 10), Attach Link, and Media */}
       <form onSubmit={handleSubmit} className="space-y-4">
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
             key={mode}
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            exit={{ opacity: 0, y: -8 }}
             transition={SPRINGS.morph}
             className="space-y-4"
           >
-            <div>
-              <label htmlFor="create-title" className="mb-1.5 block text-xs font-medium text-white">
-                {mode === 'project'
-                  ? 'Project Name'
-                  : mode === 'achievement'
-                  ? 'Achievement / Award Title'
-                  : mode === 'certificate'
-                  ? 'Certificate Title'
-                  : 'Post Headline'}
-              </label>
-              <input
-                id="create-title"
-                type="text"
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={
-                  mode === 'project'
-                    ? 'e.g. Neural Flashcard Engine v1.2'
-                    : mode === 'achievement'
-                    ? 'e.g. Finalist — National Robotics Challenge'
-                    : mode === 'certificate'
-                    ? 'e.g. UI Motion & Spatial Morphing Credential'
-                    : 'e.g. How I debugged WebSockets for our study group app'
-                }
-                className="w-full rounded-xl border border-white/14 bg-[#080910] px-4 py-2.5 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] sm:text-sm"
-              />
-            </div>
+            {/* Optional Visual / Video Attachment */}
+            <div className="rounded-2xl border border-white/10 bg-[#080910]/65 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-white">
+                  {mode === 'reel'
+                    ? 'Reel Video or Cover Visual'
+                    : mode === 'story'
+                    ? 'Story Visual'
+                    : 'Post Photo or Visual (Optional)'}
+                </span>
 
-            {(mode === 'project' || mode === 'achievement' || mode === 'certificate') && (
-              <div>
-                <label htmlFor="create-meta" className="mb-1.5 block text-xs font-medium text-white">
-                  {mode === 'project'
-                    ? 'Live Demo or Repository URL (Optional)'
-                    : 'Issuing Organization / Event'}
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[#258BFF]/40 bg-[#258BFF]/12 px-3 py-1.5 text-xs font-semibold text-white hover:border-[#27D9D0]">
+                  <Upload className="h-3.5 w-3.5 text-[#27D9D0]" />
+                  <span>{mode === 'reel' ? 'Upload Video / Photo' : 'Upload Photo'}</span>
+                  <input
+                    type="file"
+                    accept={mode === 'reel' ? 'video/*,image/*' : 'image/*'}
+                    onChange={handleMediaUpload}
+                    className="sr-only"
+                  />
                 </label>
-                <input
-                  id="create-meta"
-                  type="text"
-                  value={issuerOrLink}
-                  onChange={(e) => setIssuerOrLink(e.target.value)}
-                  placeholder={
-                    mode === 'project'
-                      ? 'https://github.com/student/project'
-                      : 'e.g. MIT Blueprint / TeenStack Academy'
-                  }
-                  className="w-full rounded-xl border border-white/14 bg-[#080910] px-4 py-2.5 text-sm text-white placeholder:text-[#A5A9BC]/45"
-                />
               </div>
-            )}
 
-            <div>
-              <label htmlFor="create-body" className="mb-1.5 block text-xs font-medium text-white">
-                Story, Architecture Breakdown, or Takeaways
-              </label>
-              <textarea
-                id="create-body"
-                rows={compactModal ? 3 : 4}
-                required
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="Share what problem you solved, tools used, and what feedback you're looking for…"
-                className="w-full rounded-xl border border-white/14 bg-[#080910] p-3.5 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] sm:text-sm"
-              />
-            </div>
-
-            {(mode === 'post' || mode === 'project') && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-white/12 bg-[#080910] px-3 py-2 text-xs font-medium text-white hover:border-[#258BFF]">
-                    <Upload className="h-3.5 w-3.5 text-[#258BFF]" />
-                    <span>Attach Screenshot</span>
-                    <input type="file" accept="image/*" onChange={handleImagePick} className="sr-only" />
-                  </label>
-
-                  {mode === 'project' && (
+              {/* Quick sample presets */}
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[11px] text-[#A5A9BC]">Quick presets:</span>
+                {SAMPLE_VISUALS.map((preset) => {
+                  const selected = uploadedMedia === preset.path;
+                  return (
                     <button
+                      key={preset.path}
                       type="button"
                       onClick={() => {
-                        setUploadedImage('');
-                        setAttachSolarisPreview((v) => !v);
+                        setUploadedMedia(selected ? '' : preset.path);
+                        setUploadedIsVideo(false);
                       }}
-                      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
-                        attachSolarisPreview
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        selected
                           ? 'border-[#27D9D0] bg-[#27D9D0]/15 text-[#27D9D0]'
-                          : 'border-white/12 bg-[#080910] text-[#A5A9BC] hover:text-white'
+                          : 'border-white/10 bg-[#111426] text-[#A5A9BC] hover:text-white'
                       }`}
                     >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Attach Interactive Terrain Canvas</span>
+                      {preset.label}
                     </button>
-                  )}
-                </div>
+                  );
+                })}
+              </div>
 
-                {attachSolarisPreview && <SolarisArtwork compact />}
-
-                {uploadedImage && (
-                  <div className="relative overflow-hidden rounded-2xl border border-white/12">
-                    <img src={uploadedImage} alt="Preview" className="max-h-52 w-full object-cover" />
-                    <button
-                      type="button"
-                      onClick={() => setUploadedImage('')}
-                      className="absolute top-2 right-2 rounded-lg bg-[#080910]/80 p-1.5 text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-
-                {!compactModal && (
-                  <div>
-                    <label htmlFor="code-snippet" className="mb-1 block text-xs font-medium text-[#A5A9BC]">
-                      Optional Code Snippet
-                    </label>
-                    <textarea
-                      id="code-snippet"
-                      rows={2}
-                      value={codeSnippet}
-                      onChange={(e) => setCodeSnippet(e.target.value)}
-                      placeholder="const spring = { type: 'spring', stiffness: 320, damping: 30 };"
-                      className="w-full rounded-xl border border-white/10 bg-[#080910] p-3 font-mono text-xs text-[#27D9D0] placeholder:text-[#A5A9BC]/35"
+              {uploadedMedia && (
+                <div className="relative mt-3 overflow-hidden rounded-2xl border border-white/12 bg-black">
+                  {uploadedIsVideo ? (
+                    <video
+                      src={uploadedMedia}
+                      controls
+                      playsInline
+                      className="max-h-60 w-full object-contain"
                     />
-                  </div>
+                  ) : (
+                    <img
+                      src={assetUrl(uploadedMedia)}
+                      alt="Selected preview"
+                      className="max-h-56 w-full object-cover"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Remove media"
+                    onClick={() => {
+                      setUploadedMedia('');
+                      setUploadedIsVideo(false);
+                    }}
+                    className="absolute top-2 right-2 rounded-lg bg-[#080910]/85 p-1.5 text-white hover:bg-[#080910]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Topic Field */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label
+                  htmlFor="create-topic"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-white"
+                >
+                  <Hash className="h-3.5 w-3.5 text-[#743BFF]" />
+                  <span>Topic</span>
+                </label>
+                <span className="text-[11px] text-[#A5A9BC]">Fill topic, caption, or both</span>
+              </div>
+
+              <input
+                id="create-topic"
+                type="text"
+                value={topic}
+                onChange={(e) => {
+                  setTopic(e.target.value);
+                  if (formError) setFormError('');
+                }}
+                placeholder={
+                  mode === 'story'
+                    ? 'e.g. Late-night hackathon sprint'
+                    : mode === 'reel'
+                    ? 'e.g. 30s Demo: Autonomous Rover Telemetry'
+                    : 'e.g. WebGL Shader Engine / Robotics'
+                }
+                className="w-full rounded-xl border border-white/14 bg-[#080910] px-4 py-2.5 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] focus:outline-none sm:text-sm"
+              />
+
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {QUICK_TOPICS.map((item) => {
+                  const isPicked = topic.toLowerCase() === item.toLowerCase();
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setTopic(isPicked ? '' : item)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        isPicked
+                          ? 'border-[#743BFF] bg-[#743BFF]/20 text-white'
+                          : 'border-white/10 bg-[#080910] text-[#A5A9BC] hover:text-white'
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Caption Field (with live inline @mention autocomplete!) */}
+            <div>
+              <label
+                htmlFor="create-caption"
+                className="mb-1.5 block text-xs font-semibold text-white"
+              >
+                Caption
+              </label>
+              <textarea
+                id="create-caption"
+                rows={compactModal ? 3 : 4}
+                value={caption}
+                onChange={(e) => {
+                  setCaption(e.target.value);
+                  if (formError) setFormError('');
+                }}
+                placeholder={`Write a caption for your ${mode}… (tip: type @username to mention someone)`}
+                className="w-full rounded-xl border border-white/14 bg-[#080910] p-3.5 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#743BFF] focus:outline-none sm:text-sm"
+              />
+
+              {/* Inline @mention suggestions while typing in Caption */}
+              {inlineCaptionSuggestions.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-xl border border-[#258BFF]/30 bg-[#111426] p-2">
+                  <span className="text-[11px] text-[#A5A9BC]">Mention:</span>
+                  {inlineCaptionSuggestions.map((peer) => (
+                    <button
+                      key={peer.id}
+                      type="button"
+                      onClick={() => handlePickInlineCaptionPeer(peer.handle)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-[#080910] px-2.5 py-1 text-xs font-semibold text-[#27D9D0] hover:border-[#27D9D0]"
+                    >
+                      <StudentAvatar
+                        presetOrUrl={peer.avatarPreset}
+                        name={peer.name}
+                        size="xs"
+                        className="!h-4 !w-4 !rounded-full"
+                      />
+                      <span>{peer.handle}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Tag People with @ (Strict Max 10) */}
+            <div className="rounded-2xl border border-white/12 bg-[#080910]/70 p-3.5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <label
+                  htmlFor="create-tag-people"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-white"
+                >
+                  <AtSign className="h-3.5 w-3.5 text-[#27D9D0]" />
+                  <span>Tag People (@)</span>
+                </label>
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                    taggedPeople.length >= MAX_TAGGED_PEOPLE
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-[#258BFF]/15 text-[#27D9D0]'
+                  }`}
+                >
+                  {taggedPeople.length} / {MAX_TAGGED_PEOPLE} tagged
+                </span>
+              </div>
+
+              {/* Active Tagged Chips */}
+              {taggedPeople.length > 0 && (
+                <div className="mb-2.5 flex flex-wrap gap-1.5">
+                  {taggedPeople.map((handle) => (
+                    <span
+                      key={handle}
+                      className="inline-flex items-center gap-1 rounded-full border border-[#27D9D0]/40 bg-[#27D9D0]/12 px-2.5 py-1 text-xs font-semibold text-[#27D9D0]"
+                    >
+                      <span>{handle}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${handle}`}
+                        onClick={() => removeTaggedPerson(handle)}
+                        className="rounded-full p-0.5 text-white/70 hover:text-white"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* @ Input */}
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-sm font-bold text-[#27D9D0]">
+                    @
+                  </span>
+                  <input
+                    id="create-tag-people"
+                    type="text"
+                    disabled={taggedPeople.length >= MAX_TAGGED_PEOPLE}
+                    value={mentionInput.replace(/^@+/, '')}
+                    onChange={(e) => {
+                      setMentionInput(e.target.value);
+                      if (tagLimitNotice) setTagLimitNotice('');
+                    }}
+                    onKeyDown={handleMentionKeyDown}
+                    placeholder={
+                      taggedPeople.length >= MAX_TAGGED_PEOPLE
+                        ? 'Max 10 people tagged'
+                        : 'username (press Enter to tag)'
+                    }
+                    className="w-full rounded-xl border border-white/14 bg-[#080910] py-2.5 pr-3.5 pl-8 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#27D9D0] focus:outline-none disabled:cursor-not-allowed disabled:opacity-55 sm:text-xs"
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={
+                    taggedPeople.length >= MAX_TAGGED_PEOPLE || !mentionInput.replace(/^@+/, '').trim()
+                  }
+                  onClick={() => addTaggedPerson(mentionInput)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-white/14 bg-[#111426] px-3.5 py-2 text-xs font-semibold text-white hover:border-[#27D9D0] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Tag</span>
+                </button>
+              </div>
+
+              {tagLimitNotice && (
+                <p className="mt-2 text-xs font-medium text-amber-300">{tagLimitNotice}</p>
+              )}
+
+              {/* Quick Peer @ Suggestions */}
+              {taggedPeople.length < MAX_TAGGED_PEOPLE && filteredPeers.length > 0 && (
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <span className="mr-0.5 text-[11px] text-[#A5A9BC]">Suggested:</span>
+                  {filteredPeers.slice(0, 5).map((peer) => (
+                    <button
+                      key={peer.id}
+                      type="button"
+                      onClick={() => addTaggedPerson(peer.handle)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#111426] px-2.5 py-1 text-[11px] font-medium text-white/90 hover:border-[#258BFF] hover:text-[#27D9D0]"
+                    >
+                      <StudentAvatar
+                        presetOrUrl={peer.avatarPreset}
+                        name={peer.name}
+                        size="xs"
+                        className="!h-4 !w-4 !rounded-full"
+                      />
+                      <span>{peer.handle}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Attach a Link */}
+            <div>
+              <label
+                htmlFor="create-attached-link"
+                className="mb-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-white"
+              >
+                <Link2 className="h-3.5 w-3.5 text-[#258BFF]" />
+                <span>Attach a Link (Optional)</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="create-attached-link"
+                  type="text"
+                  inputMode="url"
+                  value={attachedLink}
+                  onChange={(e) => {
+                    setAttachedLink(e.target.value);
+                    if (formError) setFormError('');
+                  }}
+                  placeholder="https://github.com/your-project or portfolio link"
+                  className="w-full rounded-xl border border-white/14 bg-[#080910] py-2.5 pr-9 pl-4 text-base text-white placeholder:text-[#A5A9BC]/45 focus:border-[#258BFF] focus:outline-none sm:text-sm"
+                />
+                {attachedLink.trim() && (
+                  <ExternalLink className="pointer-events-none absolute top-1/2 right-3.5 h-3.5 w-3.5 -translate-y-1/2 text-[#27D9D0]" />
                 )}
               </div>
-            )}
+            </div>
           </motion.div>
         </AnimatePresence>
 
-        {/* Skill Tags Editor */}
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-white">Skill Tags</span>
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {tags.map((t) => (
-              <span
-                key={t}
-                className="inline-flex items-center gap-1 rounded-full border border-[#743BFF]/40 bg-[#743BFF]/15 px-3 py-1 text-xs text-white"
-              >
-                #{t.replace(/^#/, '')}
-                <button
-                  type="button"
-                  aria-label={`Remove ${t}`}
-                  onClick={() => setTags(tags.filter((x) => x !== t))}
-                  className="text-[#A5A9BC] hover:text-white"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
+        {formError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-500/40 bg-rose-500/12 px-3.5 py-2.5 text-xs font-medium text-rose-200"
+          >
+            {formError}
           </div>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && tagInput.trim()) {
-                  e.preventDefault();
-                  setTags([...tags, tagInput.trim()]);
-                  setTagInput('');
-                }
-              }}
-              placeholder="Add tag (e.g. WebGL, Robotics)…"
-              className="flex-1 rounded-xl border border-white/12 bg-[#080910] px-3.5 py-2 text-xs text-white"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                if (tagInput.trim()) {
-                  setTags([...tags, tagInput.trim()]);
-                  setTagInput('');
-                }
-              }}
-              className="inline-flex items-center gap-1 rounded-xl border border-white/14 bg-[#111426] px-3 py-2 text-xs text-white"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add
-            </button>
-          </div>
-        </div>
+        )}
 
-        <div className="flex justify-end border-t border-white/10 pt-4">
+        <div className="flex items-center justify-end border-t border-white/10 pt-4">
           <motion.button
             type="submit"
             disabled={submitting}
@@ -393,7 +730,7 @@ export function CreateView({
             className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[#743BFF] via-[#4D63FF] to-[#258BFF] px-6 py-3 text-sm font-semibold text-white shadow-[0_10px_28px_-6px_rgba(116,59,255,0.75)] disabled:opacity-50"
           >
             <Check className="h-4 w-4" />
-            <span>{submitting ? 'Publishing…' : `Publish ${MODES.find((x) => x.id === mode)?.label.split(' ')[1]}`}</span>
+            <span>{submitting ? 'Sharing…' : `Share ${activeModeObj.label}`}</span>
           </motion.button>
         </div>
       </form>
