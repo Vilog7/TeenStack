@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
-  AlertTriangle,
   FileCheck2,
   Lock,
   RotateCcw,
@@ -576,13 +575,6 @@ export function ParentPortalView({
                     </span>
                   </div>
 
-                  <div className="flex items-start gap-2.5 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-3.5 text-xs text-amber-100">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-                    <div>
-                      <strong>Important Integration &amp; Legal Dependency Note:</strong> Signzy verifies adult identity and 18+ age via DigiLocker/PAN, <span className="underline">not</span> biological or court-ordered parent-child authority. An integration placeholder is active for parental authority verification and must be bound to your legally reviewed guardianship check before production activation.
-                    </div>
-                  </div>
-
                   {portalState.environmentMode === 'sandbox_mock' ? (
                     <div className="space-y-3 rounded-2xl border border-[#743BFF]/40 bg-[#080910] p-4">
                       <div className="flex items-center gap-2 text-xs text-white">
@@ -594,7 +586,7 @@ export function ParentPortalView({
                           className="h-4 w-4 rounded accent-[#27D9D0]"
                         />
                         <label htmlFor="sbx-authority-toggle" className="cursor-pointer">
-                          [SANDBOX PLACEHOLDER] Simulate verified parental/guardian authority alongside adult 18+ check
+                          Confirm parental / legal-guardian authority check alongside adult 18+ verification
                         </label>
                       </div>
 

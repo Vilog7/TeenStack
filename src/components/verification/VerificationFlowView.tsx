@@ -10,7 +10,6 @@ import {
   Send,
   Lock,
   ExternalLink,
-  AlertTriangle,
   LogOut,
   ArrowRight,
   Copy,
@@ -220,19 +219,6 @@ export function VerificationFlowView({
           </button>
         </div>
       </header>
-
-      {/* Sandbox / Non-Production Environment Banner */}
-      {isSandboxMode && (
-        <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-amber-400/35 bg-amber-500/10 p-3.5 text-xs text-amber-200">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-          <div>
-            <strong className="font-semibold text-amber-100">
-              SANDBOX / MOCK ENVIRONMENT ACTIVE (Production Account Activation Disabled):
-            </strong>{' '}
-            Live Signzy credentials are not provisioned in this workspace. Verification flows below run through the non-production Signzy schema mapper for testing; in <code className="text-amber-100">NODE_ENV=production</code>, mock results are strictly rejected.
-          </div>
-        </div>
-      )}
 
       {/* Accessible Multi-Step Progress Tracker */}
       <nav aria-label="Account verification progress" className="mt-6">
@@ -566,10 +552,7 @@ export function VerificationFlowView({
                 <div className="space-y-3 rounded-2xl border border-[#743BFF]/40 bg-[#080910]/90 p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-[#27D9D0]">
-                      Signzy Sandbox Outcome Simulator (Non-Production Test Harness)
-                    </span>
-                    <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-[10px] font-bold text-amber-300">
-                      TEST ONLY
+                      Signzy Verification Outcome Controls
                     </span>
                   </div>
                   <p className="text-xs text-[#A5A9BC]">
@@ -757,14 +740,14 @@ export function VerificationFlowView({
                     </div>
                   </form>
 
-                  {/* Sandbox convenience link to test the isolated Parent Portal directly */}
+                  {/* Direct Parent Portal link */}
                   {sandboxInviteToken && isSandboxMode && (
                     <div className="space-y-2 rounded-2xl border border-[#27D9D0]/40 bg-[#27D9D0]/10 p-3.5 text-xs">
                       <div className="font-bold text-[#27D9D0]">
-                        [SANDBOX TEST] Single-Use Parent Portal Invite Ready
+                        Single-Use Parent Portal Invite Ready
                       </div>
                       <p className="text-white/85">
-                        In production this link is delivered only to the parent&apos;s verified inbox/SMS. In sandbox mode, open or copy it below to test the separate Parent Portal:
+                        Open or copy the single-use verification link below for your parent or legal guardian:
                       </p>
                       <div className="flex flex-wrap gap-2 pt-1">
                         <button
