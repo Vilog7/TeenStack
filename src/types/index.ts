@@ -166,6 +166,7 @@ export interface UserAccount {
 
 export interface PostComment {
   id: string;
+  authorId?: string;
   author: string;
   avatar: string;
   text: string;

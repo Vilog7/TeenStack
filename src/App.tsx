@@ -270,6 +270,30 @@ export function App() {
     setExpandedPost((curr) => (curr && curr.id === postId ? { ...curr, comments: res.comments } : curr));
   };
 
+  const handleDeletePost = async (postId: string) => {
+    await api.deletePost(postId);
+    setPosts((prev) => prev.filter((p) => p.id !== postId));
+  };
+
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    const res = await api.deleteComment(postId, commentId);
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p)));
+    setExpandedPost((curr) => (curr && curr.id === postId ? { ...curr, comments: res.comments } : curr));
+  };
+
+  const handleBlockPeer = async (peerId: string) => {
+    const res = await api.toggleBlockUser(peerId, 'Blocked from profile');
+    if (res.blocked) {
+      setPeers((prev) => prev.filter((p) => p.id !== peerId));
+      setPosts((prev) => prev.filter((p) => p.authorId !== peerId));
+      setConnectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(peerId);
+        return next;
+      });
+    }
+  };
+
   const handlePublishPost = async (payload: {
     category: FeedPost['category'];
     title: string;
@@ -668,6 +692,7 @@ export function App() {
                       const res = await api.addAchievement({ title });
                       setUser(res.user);
                     }}
+                    onBlockPeer={handleBlockPeer}
                     onOpenOnboardingWizard={() => navigate('onboarding')}
                     onLogout={handleLogout}
                   />
@@ -680,12 +705,22 @@ export function App() {
         {/* Shared-Layout Morphing Overlays */}
         <ExpandedPostModal
           post={expandedPost}
+          currentUserId={user?.id}
           liked={expandedPost ? likedPostIds.has(expandedPost.id) : false}
           saved={expandedPost ? savedPostIds.has(expandedPost.id) : false}
           onClose={() => setExpandedPost(null)}
           onToggleLike={handleToggleLike}
           onToggleSave={handleToggleSave}
           onAddComment={handleAddComment}
+          onDeletePost={handleDeletePost}
+          onDeleteComment={handleDeleteComment}
+          onReportPost={async (postId) => {
+            await api.reportContent({
+              targetType: 'post',
+              targetId: postId,
+              reasonCategory: 'Unsafe or Inappropriate Content',
+            });
+          }}
         />
 
         {user && (

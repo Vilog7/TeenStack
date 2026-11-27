@@ -1534,4 +1534,145 @@ export const api = {
       };
     }
   },
+
+  // ===========================================================================
+  // MEDIA UPLOAD, CONTENT MODERATION / BLOCKING & ACCOUNT LIFECYCLE ENDPOINTS
+  // ===========================================================================
+  async uploadMedia(
+    dataUrl: string,
+    purpose: 'avatar' | 'post' | 'story' | 'reel' = 'post'
+  ): Promise<{ mediaId: string; url: string; mimeType: string }> {
+    try {
+      return await request('/api/media/upload', {
+        method: 'POST',
+        body: JSON.stringify({ dataUrl, purpose }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      return {
+        mediaId: `med-static-${Date.now()}`,
+        url: dataUrl,
+        mimeType: dataUrl.startsWith('data:video/') ? 'video/mp4' : 'image/jpeg',
+      };
+    }
+  },
+
+  async deletePost(postId: string): Promise<{ deleted: boolean }> {
+    try {
+      return await request(`/api/posts/${encodeURIComponent(postId)}`, {
+        method: 'DELETE',
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const next = getStaticPosts().filter((p) => p.id !== postId);
+      saveJson(STATIC_POSTS_KEY, next);
+      return { deleted: true };
+    }
+  },
+
+  async deleteComment(
+    postId: string,
+    commentId: string
+  ): Promise<{ comments: FeedPost['comments'] }> {
+    try {
+      return await request(
+        `/api/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+        { method: 'DELETE' }
+      );
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const posts = getStaticPosts();
+      const target = posts.find((p) => p.id === postId);
+      const nextComments = target
+        ? target.comments.filter((c) => c.id !== commentId)
+        : [];
+      if (target) {
+        target.comments = nextComments;
+        saveJson(STATIC_POSTS_KEY, posts);
+      }
+      return { comments: nextComments };
+    }
+  },
+
+  async deleteMessage(messageId: string): Promise<{ deleted: boolean }> {
+    try {
+      return await request(`/api/messages/${encodeURIComponent(messageId)}`, {
+        method: 'DELETE',
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const next = getStaticMessages().filter((m) => m.id !== messageId);
+      saveJson(STATIC_MESSAGES_KEY, next);
+      return { deleted: true };
+    }
+  },
+
+  async toggleBlockUser(
+    targetUserId: string,
+    reason = ''
+  ): Promise<{
+    blocked: boolean;
+    peers?: PeerStudent[];
+    friendIds?: string[];
+  }> {
+    try {
+      return await request('/api/safety/block', {
+        method: 'POST',
+        body: JSON.stringify({ targetUserId, reason }),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      return { blocked: true };
+    }
+  },
+
+  async reportContent(payload: {
+    targetType: 'post' | 'comment' | 'message' | 'user';
+    targetId: string;
+    reasonCategory: string;
+    details?: string;
+  }): Promise<{ reportId: string; status: string }> {
+    try {
+      return await request('/api/safety/report', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      return { reportId: `rpt-static-${Date.now()}`, status: 'OPEN' };
+    }
+  },
+
+  async changePassword(payload: {
+    currentPassword: string;
+    newPassword: string;
+  }): Promise<{ ok: boolean }> {
+    try {
+      return await request('/api/account/change-password', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      if (payload.newPassword.length < 8) {
+        throw new Error('New password must be at least 8 characters long.');
+      }
+      return { ok: true };
+    }
+  },
+
+  async exportMyData(): Promise<Record<string, any>> {
+    try {
+      return await request('/api/privacy/export-data');
+    } catch (err: any) {
+      if (err?.isApiError) throw err;
+      const me = await this.me();
+      return {
+        schemaVersion: 'DPDP-TEENSTACK-EXPORT-v2026.1',
+        exportedAt: new Date().toISOString(),
+        account: me.user || DEFAULT_DEMO_USER,
+        posts: getStaticPosts().filter((p) => p.authorId === (me.user?.id || DEFAULT_DEMO_USER.id)),
+      };
+    }
+  },
 };

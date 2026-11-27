@@ -18,6 +18,7 @@ import {
   createVerificationEngine,
   CURRENT_CONSENT_VERSION,
 } from './verification_engine.mjs';
+import { createBackendCompletionServices } from './backend_services.mjs';
 import { createPlatformDomainServices } from './platform_domains.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,14 +49,17 @@ function parseCookies(cookieHeader = '') {
   return out;
 }
 
-function readRawBody(req, maxBytes = 2_000_000) {
+function readRawBody(req, maxBytes = 6_000_000) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
     req.on('data', (chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
-        reject(new Error('Payload too large'));
+        const err = new Error('Payload too large');
+        err.status = 413;
+        err.code = 'PAYLOAD_TOO_LARGE';
+        reject(err);
         req.destroy();
         return;
       }
@@ -66,8 +70,8 @@ function readRawBody(req, maxBytes = 2_000_000) {
   });
 }
 
-async function readJsonBody(req) {
-  const buf = await readRawBody(req);
+async function readJsonBody(req, maxBytes = 6_000_000) {
+  const buf = await readRawBody(req, maxBytes);
   const raw = buf.toString('utf8');
   if (!raw) return {};
   try {
@@ -81,6 +85,7 @@ async function readJsonBody(req) {
 
 export function createTeenStackServer({
   dbPath = path.join(__dirname, 'teenstack.sqlite'),
+  uploadsDir = path.join(path.dirname(dbPath), 'uploads'),
   env = process.env,
   distPath = defaultDistPath,
   seedDemo = true,
@@ -89,8 +94,19 @@ export function createTeenStackServer({
   const db = initializeDatabase({ dbPath, cryptoCtx, seedDemo });
   const signzyService = createSignzyAgeVerificationService(env);
   const engine = createVerificationEngine({ db, cryptoCtx, signzyService });
-  const domains = createPlatformDomainServices({ db, cryptoCtx, engine });
+  const services = createBackendCompletionServices({ db, cryptoCtx, engine, uploadsDir });
+  const domains = createPlatformDomainServices({ db, cryptoCtx, engine, services });
   const limiter = new RateLimiter();
+
+  // Automated background sweep for expired sessions, 24h stories & DPDP hard-erasure requests
+  const maintenanceTimer = setInterval(() => {
+    try {
+      services.runMaintenanceSweep();
+    } catch {
+      // ignore transient maintenance sweep error
+    }
+  }, 5 * 60 * 1000);
+  maintenanceTimer.unref();
 
   function sendJson(res, status, data, extraHeaders = {}) {
     res.writeHead(status, {
@@ -301,10 +317,15 @@ export function createTeenStackServer({
 
         // Issue restricted verification-only session (account_status = PENDING_VERIFICATION)
         const token = randomBytes(32).toString('hex');
-        db.prepare('INSERT INTO sessions (token, user_id, role, expires_at) VALUES (?, ?, ?, ?)').run(
+        const ua = String(req.headers['user-agent'] || 'Browser Session').slice(0, 120);
+        db.prepare(
+          'INSERT INTO sessions (token, user_id, role, created_at, user_agent, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(
           token,
           userRow.id,
           'student',
+          new Date().toISOString(),
+          ua,
           Date.now() + 1000 * 60 * 60 * 24
         );
 
@@ -345,10 +366,15 @@ export function createTeenStackServer({
 
         const token = randomBytes(32).toString('hex');
         const ttl = rememberMe ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 24;
-        db.prepare('INSERT INTO sessions (token, user_id, role, expires_at) VALUES (?, ?, ?, ?)').run(
+        const ua = String(req.headers['user-agent'] || 'Browser Session').slice(0, 120);
+        db.prepare(
+          'INSERT INTO sessions (token, user_id, role, created_at, user_agent, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(
           token,
           userRow.id,
           userRow.role || 'student',
+          new Date().toISOString(),
+          ua,
           Date.now() + ttl
         );
 
@@ -860,6 +886,48 @@ export function createTeenStackServer({
       // =========================================================================
       // 4. PRIVACY, DATA RETENTION & COMPLIANCE AUDIT RBAC ENDPOINTS
       // =========================================================================
+      if (pathname === '/api/privacy/export-data' && method === 'GET') {
+        if (!checkRateLimit(req, res, 'dpdp_export', 6, 60_000)) return;
+        const auth = getAuthUser(req);
+        if (!auth) return sendJson(res, 401, { error: 'Unauthorized' });
+        const exportBundle = services.exportUserDataBundle(auth.row);
+        return sendJson(res, 200, exportBundle);
+      }
+
+      if (pathname === '/api/account/change-password' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'change_pwd', 6, 60_000)) return;
+        const auth = getAuthUser(req);
+        if (!auth) return sendJson(res, 401, { error: 'Unauthorized' });
+        const body = await readJsonBody(req);
+        const changed = services.changeAccountPassword({
+          userRow: auth.row,
+          currentPassword: body.currentPassword,
+          newPassword: body.newPassword,
+          keepSessionToken: auth.token,
+        });
+        return sendJson(res, 200, changed);
+      }
+
+      if (pathname === '/api/account/sessions' && method === 'GET') {
+        const auth = getAuthUser(req);
+        if (!auth) return sendJson(res, 401, { error: 'Unauthorized' });
+        return sendJson(res, 200, {
+          sessions: services.listActiveSessions(auth.user.id, auth.token),
+        });
+      }
+
+      const revokeSessMatch = pathname.match(/^\/api\/account\/sessions\/([^/]+)$/);
+      if (revokeSessMatch && method === 'DELETE') {
+        const auth = getAuthUser(req);
+        if (!auth) return sendJson(res, 401, { error: 'Unauthorized' });
+        const resRevoke = services.revokeSessionById({
+          userId: auth.user.id,
+          sessionId: decodeURIComponent(revokeSessMatch[1]),
+          currentToken: auth.token,
+        });
+        return sendJson(res, 200, resRevoke);
+      }
+
       if (pathname === '/api/privacy/delete-account' && method === 'POST') {
         const auth = getAuthUser(req);
         if (!auth) return sendJson(res, 401, { error: 'Unauthorized' });
@@ -879,6 +947,46 @@ export function createTeenStackServer({
           deletionRequestId: deletionId,
           status: 'SCHEDULED',
         });
+      }
+
+      if (pathname === '/api/admin/moderation/reports' && method === 'GET') {
+        const auth = getAuthUser(req);
+        const adminKeyHeader = req.headers['x-compliance-admin-key'] || '';
+        const expectedAdminKey = env.COMPLIANCE_ADMIN_KEY || '';
+        const isAdminRole = auth && auth.sessionRole === 'compliance_admin';
+        const isKeyAuthed = expectedAdminKey && adminKeyHeader === expectedAdminKey;
+
+        if (!isAdminRole && !isKeyAuthed) {
+          return sendJson(res, 403, { error: 'Forbidden: compliance_admin role required.' });
+        }
+
+        const statusFilter = urlObj.searchParams.get('status') || null;
+        return sendJson(res, 200, {
+          reports: services.listSafetyReports({ status: statusFilter }),
+        });
+      }
+
+      const resolveReportMatch = pathname.match(/^\/api\/admin\/moderation\/reports\/([^/]+)\/resolve$/);
+      if (resolveReportMatch && method === 'POST') {
+        const auth = getAuthUser(req);
+        const adminKeyHeader = req.headers['x-compliance-admin-key'] || '';
+        const expectedAdminKey = env.COMPLIANCE_ADMIN_KEY || '';
+        const isAdminRole = auth && auth.sessionRole === 'compliance_admin';
+        const isKeyAuthed = expectedAdminKey && adminKeyHeader === expectedAdminKey;
+
+        if (!isAdminRole && !isKeyAuthed) {
+          return sendJson(res, 403, { error: 'Forbidden: compliance_admin role required.' });
+        }
+
+        const body = await readJsonBody(req);
+        const report = services.resolveSafetyReport({
+          reportId: decodeURIComponent(resolveReportMatch[1]),
+          status: body.status,
+          resolutionNote: body.resolutionNote,
+          removeTargetContent: Boolean(body.removeTargetContent),
+          reviewer: auth?.user?.username || 'compliance_admin',
+        });
+        return sendJson(res, 200, { report });
       }
 
       if (pathname === '/api/admin/compliance/audit-logs' && method === 'GET') {
@@ -933,6 +1041,51 @@ export function createTeenStackServer({
       }
 
       // =========================================================================
+      // 4B. BINARY MEDIA UPLOADS & SERVING (/uploads/:filename, /api/media/upload)
+      // =========================================================================
+      const uploadServeMatch = pathname.match(/^\/uploads\/([^/]+)$/);
+      if (uploadServeMatch && method === 'GET') {
+        const resolved = services.resolveUploadFile(decodeURIComponent(uploadServeMatch[1]));
+        if (!resolved) {
+          return sendJson(res, 404, { error: 'Media asset not found.' });
+        }
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          'Content-Type': resolved.mimeType,
+          'Content-Length': String(resolved.byteSize),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        });
+        fs.createReadStream(resolved.filePath).pipe(res);
+        return;
+      }
+
+      if (pathname === '/api/media/upload' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'media_upload', 20, 60_000)) return;
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+
+        const cType = String(req.headers['content-type'] || '').toLowerCase();
+        if (cType.includes('application/json')) {
+          const body = await readJsonBody(req, 22_000_000);
+          const saved = services.saveUploadedMedia({
+            userId: auth.user.id,
+            dataUrlOrBuffer: body.dataUrl || body.base64,
+            purpose: body.purpose || 'post',
+          });
+          return sendJson(res, 201, saved);
+        }
+
+        const rawBuf = await readRawBody(req, 16 * 1024 * 1024);
+        const purpose = urlObj.searchParams.get('purpose') || 'post';
+        const saved = services.saveUploadedMedia({
+          userId: auth.user.id,
+          dataUrlOrBuffer: rawBuf,
+          purpose,
+        });
+        return sendJson(res, 201, saved);
+      }
+
+      // =========================================================================
       // 5. GATED TEENSTACK FULL PLATFORM ENDPOINTS (REQUIRE ACTIVE STATUS!)
       // =========================================================================
       if (pathname === '/api/bootstrap' && method === 'GET') {
@@ -963,6 +1116,14 @@ export function createTeenStackServer({
             ...((profilePatch && profilePatch.privacy) || {}),
           },
         };
+
+        if (mergedProfile.avatarUrl) {
+          mergedProfile.avatarUrl = services.persistInlineDataUrlIfNeeded({
+            userId: auth.user.id,
+            maybeUrl: mergedProfile.avatarUrl,
+            purpose: 'avatar',
+          });
+        }
 
         const nextStep =
           typeof step === 'number' ? Math.max(1, Math.min(5, step)) : auth.row.onboarding_step;
@@ -1084,7 +1245,7 @@ export function createTeenStackServer({
         if (!checkRateLimit(req, res, 'create_post', 15, 60_000)) return;
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, 22_000_000);
         const post = domains.createPostWithRules({
           authorUser: auth.user,
           category: body.category,
@@ -1118,6 +1279,18 @@ export function createTeenStackServer({
           authorUser: auth.user,
           postId: decodeURIComponent(commentMatch[1]),
           text: body.text,
+        });
+        return sendJson(res, 200, { comments });
+      }
+
+      const commentDeleteMatch = pathname.match(/^\/api\/posts\/([^/]+)\/comments\/([^/]+)$/);
+      if (commentDeleteMatch && method === 'DELETE') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const comments = domains.deleteCommentFromPost({
+          userId: auth.user.id,
+          postId: decodeURIComponent(commentDeleteMatch[1]),
+          commentId: decodeURIComponent(commentDeleteMatch[2]),
         });
         return sendJson(res, 200, { comments });
       }
@@ -1249,29 +1422,19 @@ export function createTeenStackServer({
       if (pathname === '/api/messages' && method === 'GET') {
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
-        const threadFilter = urlObj.searchParams.get('threadId');
-        const rows = threadFilter
-          ? db
-              .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY datetime(created_at) ASC')
-              .all(threadFilter)
-          : db.prepare('SELECT * FROM messages ORDER BY datetime(created_at) ASC').all();
-        return sendJson(res, 200, {
-          messages: rows.map((m) => ({
-            id: m.id,
-            threadId: m.thread_id,
-            senderId: m.sender_id,
-            senderName: m.sender_name,
-            text: m.text,
-            createdAt: m.created_at,
-          })),
+        const threadFilter = urlObj.searchParams.get('threadId') || null;
+        const messages = domains.listMessagesForUser({
+          userId: auth.user.id,
+          threadId: threadFilter,
         });
+        return sendJson(res, 200, { messages });
       }
 
       if (pathname === '/api/messages' && method === 'POST') {
         if (!checkRateLimit(req, res, 'send_message', 30, 60_000)) return;
         const auth = requireActiveStudentAccount(req, res);
         if (!auth) return;
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, 16_000_000);
         if (!body.threadId || !body.text || !String(body.text).trim()) {
           return sendJson(res, 400, { error: 'Message text required' });
         }
@@ -1281,6 +1444,58 @@ export function createTeenStackServer({
           text: body.text,
         });
         return sendJson(res, 201, { message });
+      }
+
+      const msgDeleteMatch = pathname.match(/^\/api\/messages\/([^/]+)$/);
+      if (msgDeleteMatch && method === 'DELETE') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const delRes = domains.deleteChatMessage({
+          userId: auth.user.id,
+          messageId: decodeURIComponent(msgDeleteMatch[1]),
+        });
+        return sendJson(res, 200, delRes);
+      }
+
+      // --- Teen Safety: User Blocks & Content Reporting ---
+      if (pathname === '/api/safety/blocks' && method === 'GET') {
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        return sendJson(res, 200, {
+          blockedUsers: services.listMyBlockedUsers(auth.user.id),
+        });
+      }
+
+      if (pathname === '/api/safety/block' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'safety_block', 15, 60_000)) return;
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const blockRes = services.toggleUserBlock({
+          blockerId: auth.user.id,
+          targetUserId: body.targetUserId,
+          reason: body.reason,
+        });
+        return sendJson(res, 200, {
+          ...blockRes,
+          peers: domains.listPeersForUser(auth.user.id),
+          friendIds: Array.from(domains.getUserFriendIdsSet(auth.user.id)),
+        });
+      }
+
+      if (pathname === '/api/safety/report' && method === 'POST') {
+        if (!checkRateLimit(req, res, 'safety_report', 10, 60_000)) return;
+        const auth = requireActiveStudentAccount(req, res);
+        if (!auth) return;
+        const body = await readJsonBody(req);
+        const reportRes = services.submitSafetyReport({
+          reporterId: auth.user.id,
+          targetType: body.targetType,
+          targetId: body.targetId,
+          reasonCategory: body.reasonCategory,
+          details: body.details,
+        });
+        return sendJson(res, 201, reportRes);
       }
 
       // --- Opportunities, Hackathons & Student Bounties ---
@@ -1419,7 +1634,7 @@ export function createTeenStackServer({
     }
   });
 
-  return { server, db, cryptoCtx, signzyService, engine, domains };
+  return { server, db, cryptoCtx, signzyService, engine, services, domains };
 }
 
 // Start server automatically when invoked directly via `node server/index.mjs`

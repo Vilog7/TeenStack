@@ -186,10 +186,15 @@ export function OnboardingView({
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setAvatarUrl(reader.result);
-        setErrorMsg('');
+        try {
+          const uploaded = await api.uploadMedia(reader.result, 'avatar');
+          setAvatarUrl(uploaded.url);
+          setErrorMsg('');
+        } catch (err: any) {
+          setErrorMsg(err.message || 'Could not upload profile photo.');
+        }
       }
     };
     reader.readAsDataURL(file);

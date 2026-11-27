@@ -6,7 +6,8 @@ export function assetUrl(relPath: string): string {
     relPath.startsWith('data:') ||
     relPath.startsWith('http://') ||
     relPath.startsWith('https://') ||
-    relPath.startsWith('blob:')
+    relPath.startsWith('blob:') ||
+    relPath.startsWith('/uploads/')
   ) {
     return relPath;
   }

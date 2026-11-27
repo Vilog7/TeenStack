@@ -17,6 +17,7 @@ import {
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { PEER_STUDENTS } from '../../data/catalog';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
+import { api } from '../../lib/api';
 import type { FeedPost, UserAccount } from '../../types';
 
 export type CreateMode = 'story' | 'post' | 'reel';
@@ -198,10 +199,19 @@ export function CreateView({
     if (!file) return;
     const isVid = file.type.startsWith('video/');
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setUploadedMedia(reader.result);
-        setUploadedIsVideo(isVid);
+        try {
+          const uploaded = await api.uploadMedia(
+            reader.result,
+            mode === 'reel' ? 'reel' : mode === 'story' ? 'story' : 'post'
+          );
+          setUploadedMedia(uploaded.url);
+          setUploadedIsVideo(uploaded.mimeType.startsWith('video/') || isVid);
+          setFormError('');
+        } catch (err: any) {
+          setFormError(err.message || 'Could not upload selected media file.');
+        }
       }
     };
     reader.readAsDataURL(file);

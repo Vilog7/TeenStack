@@ -83,7 +83,7 @@ function formatRelativeLabel(iso) {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
+export function createPlatformDomainServices({ db, cryptoCtx, engine, services = null }) {
   // ===========================================================================
   // 1. IN-APP NOTIFICATIONS ENGINE
   // ===========================================================================
@@ -396,18 +396,27 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
 
   function listPeersForUser(viewerId) {
     const viewerFriends = getUserFriendIdsSet(viewerId);
+    const blockedSet = viewerId && services ? services.getBlockedIdsSet(viewerId) : new Set();
     const rows = db
       .prepare(
         "SELECT * FROM users WHERE account_status = 'ACTIVE' AND id != ? ORDER BY datetime(created_at) ASC LIMIT 50"
       )
       .all(viewerId || '');
-    return rows.map((r) => mapUserRowToPeerStudent(r, viewerId, viewerFriends));
+    return rows
+      .filter((r) => !blockedSet.has(r.id))
+      .map((r) => mapUserRowToPeerStudent(r, viewerId, viewerFriends));
   }
 
   function toggleFriendship({ viewerRow, targetPeerId }) {
     if (viewerRow.id === targetPeerId) {
       const err = new Error('You cannot connect with your own account.');
       err.status = 400;
+      throw err;
+    }
+    if (services && services.isEitherBlocked(viewerRow.id, targetPeerId)) {
+      const err = new Error('Cannot connect while a safety block is active between these accounts.');
+      err.status = 403;
+      err.code = 'USER_BLOCKED';
       throw err;
     }
     const targetRow = db
@@ -483,8 +492,15 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       err.status = 404;
       throw err;
     }
+    if (viewerId && services && services.isEitherBlocked(viewerId, targetRow.id)) {
+      const err = new Error('Student profile is unavailable due to safety block settings.');
+      err.status = 403;
+      err.code = 'USER_BLOCKED';
+      throw err;
+    }
 
     const viewerFriends = getUserFriendIdsSet(viewerId);
+    const blockedSet = viewerId && services ? services.getBlockedIdsSet(viewerId) : new Set();
     const peerCard = mapUserRowToPeerStudent(targetRow, viewerId, viewerFriends);
     const allPosts = listFeedPosts({ viewerId, includeStories: true });
 
@@ -507,7 +523,8 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     const targetFriendIds = getUserFriendIdsSet(targetRow.id);
     const allOtherUsers = db
       .prepare("SELECT * FROM users WHERE account_status = 'ACTIVE' AND id != ?")
-      .all(targetRow.id);
+      .all(targetRow.id)
+      .filter((u) => !blockedSet.has(u.id));
 
     const friends = allOtherUsers
       .filter((u) => targetFriendIds.has(u.id))
@@ -532,12 +549,13 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
   // ===========================================================================
   // 5. FEED POSTS, REELS, 24H STORIES, COMMENTS, SHARES & @MENTIONS
   // ===========================================================================
-  function formatPostRow(r, likedSet, savedSet, viewedStoriesSet) {
+  function formatPostRow(r, likedSet, savedSet, viewedStoriesSet, blockedSet = new Set()) {
     const relationalComments = db
       .prepare(
         'SELECT id, author_id, author_name, author_avatar, text, created_at FROM post_comments WHERE post_id = ? ORDER BY datetime(created_at) ASC, rowid ASC'
       )
-      .all(r.id);
+      .all(r.id)
+      .filter((c) => !blockedSet.has(c.author_id));
 
     const comments =
       relationalComments.length > 0
@@ -549,7 +567,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
             text: c.text,
             time: formatRelativeLabel(c.created_at),
           }))
-        : safeJsonParse(r.comments_json, []);
+        : safeJsonParse(r.comments_json, []).filter((c) => !c.authorId || !blockedSet.has(c.authorId));
 
     return {
       id: r.id,
@@ -587,6 +605,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     const likedSet = new Set();
     const savedSet = new Set();
     const viewedStoriesSet = new Set();
+    const blockedSet = viewerId && services ? services.getBlockedIdsSet(viewerId) : new Set();
 
     if (viewerId) {
       const interactions = db
@@ -611,6 +630,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
 
     return rows
       .filter((r) => {
+        if (blockedSet.has(r.author_id)) return false;
         // Auto-expire stories older than 24h
         if (r.category === 'story') {
           if (!includeStories) return false;
@@ -632,7 +652,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
         }
         return true;
       })
-      .map((r) => formatPostRow(r, likedSet, savedSet, viewedStoriesSet));
+      .map((r) => formatPostRow(r, likedSet, savedSet, viewedStoriesSet, blockedSet));
   }
 
   function createPostWithRules({
@@ -699,6 +719,25 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       'certificate',
     ]);
     const finalCategory = allowedCategories.has(category) ? category : 'post';
+
+    // Automatically convert inline base64 data URLs into binary /uploads/... files
+    if (services) {
+      if (sanitizedMeta.imageUrl) {
+        sanitizedMeta.imageUrl = services.persistInlineDataUrlIfNeeded({
+          userId: authorUser.id,
+          maybeUrl: sanitizedMeta.imageUrl,
+          purpose: finalCategory === 'story' ? 'story' : 'post',
+        });
+      }
+      if (sanitizedMeta.videoUrl) {
+        sanitizedMeta.videoUrl = services.persistInlineDataUrlIfNeeded({
+          userId: authorUser.id,
+          maybeUrl: sanitizedMeta.videoUrl,
+          purpose: 'reel',
+        });
+      }
+    }
+
     const now = new Date();
     const expiresAt =
       finalCategory === 'story'
@@ -743,7 +782,11 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       const taggedUser = db
         .prepare("SELECT id FROM users WHERE LOWER(username) = ? AND account_status = 'ACTIVE'")
         .get(uname);
-      if (taggedUser && taggedUser.id !== authorUser.id) {
+      if (
+        taggedUser &&
+        taggedUser.id !== authorUser.id &&
+        (!services || !services.isEitherBlocked(authorUser.id, taggedUser.id))
+      ) {
         createNotification({
           userId: taggedUser.id,
           type: 'mention',
@@ -759,7 +802,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
   }
 
   function deletePost({ userId, postId }) {
-    const row = db.prepare('SELECT author_id FROM posts WHERE id = ?').get(postId);
+    const row = db.prepare('SELECT author_id, media_meta FROM posts WHERE id = ?').get(postId);
     if (!row) {
       const err = new Error('Post not found.');
       err.status = 404;
@@ -769,6 +812,11 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       const err = new Error('You can only delete your own posts.');
       err.status = 403;
       throw err;
+    }
+    if (services) {
+      const meta = safeJsonParse(row.media_meta, {});
+      services.unlinkUploadUrlIfOwned(meta.imageUrl);
+      services.unlinkUploadUrlIfOwned(meta.videoUrl);
     }
     db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
     return { deleted: true, postId };
@@ -787,6 +835,12 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     if (!postRow) {
       const err = new Error('Post not found.');
       err.status = 404;
+      throw err;
+    }
+    if (services && services.isEitherBlocked(authorUser.id, postRow.author_id)) {
+      const err = new Error('You cannot comment on this post.');
+      err.status = 403;
+      err.code = 'USER_BLOCKED';
       throw err;
     }
 
@@ -816,6 +870,49 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       postId
     );
     return formatted.comments;
+  }
+
+  function deleteCommentFromPost({ userId, postId, commentId }) {
+    const postRow = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
+    if (!postRow) {
+      const err = new Error('Post not found.');
+      err.status = 404;
+      throw err;
+    }
+    const commentRow = db
+      .prepare('SELECT * FROM post_comments WHERE id = ? AND post_id = ?')
+      .get(commentId, postId);
+    if (!commentRow) {
+      const err = new Error('Comment not found.');
+      err.status = 404;
+      throw err;
+    }
+    if (commentRow.author_id !== userId && postRow.author_id !== userId) {
+      const err = new Error('You can only delete your own comments or comments on your posts.');
+      err.status = 403;
+      throw err;
+    }
+
+    db.prepare('DELETE FROM post_comments WHERE id = ?').run(commentId);
+    const remaining = db
+      .prepare(
+        'SELECT id, author_id, author_name, author_avatar, text, created_at FROM post_comments WHERE post_id = ? ORDER BY datetime(created_at) ASC, rowid ASC'
+      )
+      .all(postId)
+      .map((c) => ({
+        id: c.id,
+        authorId: c.author_id,
+        author: c.author_name,
+        avatar: c.author_avatar,
+        text: c.text,
+        time: formatRelativeLabel(c.created_at),
+      }));
+
+    db.prepare('UPDATE posts SET comments_json = ? WHERE id = ?').run(
+      JSON.stringify(remaining),
+      postId
+    );
+    return remaining;
   }
 
   function recordPostShare(postId) {
@@ -853,8 +950,10 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
   // ===========================================================================
   function ensureUserDefaultThreads(userId) {
     const nowIso = new Date().toISOString();
-    // Ensure every active student has participant cursors for default community/mentor threads
-    const defaultThreads = db.prepare('SELECT id FROM chat_threads WHERE direct_key IS NULL OR id IN (\'thread-maya\', \'thread-rohan\', \'thread-study\', \'thread-kai\')').all();
+    // Auto-join only public group study rooms (never another student's private 1:1 DM thread!)
+    const defaultThreads = db
+      .prepare('SELECT id FROM chat_threads WHERE is_group = 1 AND direct_key IS NULL')
+      .all();
     const ins = db.prepare(
       'INSERT OR IGNORE INTO chat_participants (thread_id, user_id, last_read_at, joined_at) VALUES (?, ?, ?, ?)'
     );
@@ -907,6 +1006,12 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
   }
 
   function openDirectThreadWithPrivacyCheck({ senderRow, targetPeerId }) {
+    if (services && services.isEitherBlocked(senderRow.id, targetPeerId)) {
+      const err = new Error('Direct messaging is unavailable due to safety block settings.');
+      err.status = 403;
+      err.code = 'USER_BLOCKED';
+      throw err;
+    }
     const peerRow = db
       .prepare("SELECT * FROM users WHERE id = ? AND account_status = 'ACTIVE'")
       .get(targetPeerId);
@@ -936,6 +1041,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
 
   function listThreadsForUser(userId) {
     ensureUserDefaultThreads(userId);
+    const blockedSet = services ? services.getBlockedIdsSet(userId) : new Set();
     const rows = db
       .prepare(`
         SELECT t.*, p.last_read_at
@@ -944,7 +1050,14 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
         WHERE p.user_id = ?
         ORDER BY datetime(t.updated_at) DESC
       `)
-      .all(userId);
+      .all(userId)
+      .filter((t) => {
+        if (!t.direct_key) return true;
+        const otherId = String(t.direct_key)
+          .split('::')
+          .find((id) => id !== userId);
+        return !otherId || !blockedSet.has(otherId);
+      });
 
     let totalUnread = 0;
     const threads = rows.map((t) => {
@@ -973,13 +1086,74 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
   }
 
   function markThreadRead({ userId, threadId }) {
+    ensureUserDefaultThreads(userId);
+    const participant = db
+      .prepare('SELECT 1 FROM chat_participants WHERE thread_id = ? AND user_id = ?')
+      .get(threadId, userId);
+    if (!participant) {
+      const err = new Error('You are not a participant in this conversation.');
+      err.status = 403;
+      err.code = 'FORBIDDEN_THREAD_ACCESS';
+      throw err;
+    }
     const nowIso = new Date().toISOString();
-    db.prepare(`
-      INSERT INTO chat_participants (thread_id, user_id, last_read_at, joined_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(thread_id, user_id) DO UPDATE SET last_read_at = excluded.last_read_at
-    `).run(threadId, userId, nowIso, nowIso);
+    db.prepare('UPDATE chat_participants SET last_read_at = ? WHERE thread_id = ? AND user_id = ?').run(
+      nowIso,
+      threadId,
+      userId
+    );
     return listThreadsForUser(userId);
+  }
+
+  function listMessagesForUser({ userId, threadId = null }) {
+    ensureUserDefaultThreads(userId);
+    const blockedSet = services ? services.getBlockedIdsSet(userId) : new Set();
+
+    if (threadId) {
+      const participant = db
+        .prepare('SELECT 1 FROM chat_participants WHERE thread_id = ? AND user_id = ?')
+        .get(threadId, userId);
+      if (!participant) {
+        const err = new Error('You are not authorized to read messages in this conversation.');
+        err.status = 403;
+        err.code = 'FORBIDDEN_THREAD_ACCESS';
+        throw err;
+      }
+      const rows = db
+        .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY datetime(created_at) ASC')
+        .all(threadId);
+      return rows
+        .filter((m) => !blockedSet.has(m.sender_id))
+        .map((m) => ({
+          id: m.id,
+          threadId: m.thread_id,
+          senderId: m.sender_id,
+          senderName: m.sender_name,
+          text: m.text,
+          createdAt: m.created_at,
+        }));
+    }
+
+    const rows = db
+      .prepare(`
+        SELECT m.*
+        FROM messages m
+        JOIN chat_participants p ON p.thread_id = m.thread_id
+        WHERE p.user_id = ?
+        ORDER BY datetime(m.created_at) ASC
+      `)
+      .all(userId);
+
+    return rows
+      .filter((m) => !blockedSet.has(m.sender_id))
+      .map((m) => ({
+        id: m.id,
+        threadId: m.thread_id,
+        senderId: m.sender_id,
+        senderName: m.sender_name,
+        text: m.text,
+        createdAt: m.created_at,
+      }));
   }
 
   function sendChatMessageWithSafety({ senderUser, threadId, text }) {
@@ -991,17 +1165,57 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       throw err;
     }
 
-    const nowIso = new Date().toISOString();
-    // Ensure thread row exists even for custom client thread IDs
+    ensureUserDefaultThreads(senderUser.id);
     const existingThread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId);
     if (!existingThread) {
-      db.prepare(`
-        INSERT INTO chat_threads (id, name, handle, role_badge, avatar_preset, is_group, updated_at, created_at)
-        VALUES (?, ?, '', 'Student Chat', 'violet-coder', 0, ?, ?)
-      `).run(threadId, threadId, nowIso, nowIso);
-    } else {
-      db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(nowIso, threadId);
+      const err = new Error('Conversation thread not found.');
+      err.status = 404;
+      err.code = 'THREAD_NOT_FOUND';
+      throw err;
     }
+
+    const participant = db
+      .prepare('SELECT 1 FROM chat_participants WHERE thread_id = ? AND user_id = ?')
+      .get(threadId, senderUser.id);
+    if (!participant) {
+      const err = new Error('You are not a participant in this conversation.');
+      err.status = 403;
+      err.code = 'FORBIDDEN_THREAD_ACCESS';
+      throw err;
+    }
+
+    // Enforce block & DM privacy rules on 1:1 threads even if thread existed earlier
+    if (existingThread.direct_key) {
+      const otherId = String(existingThread.direct_key)
+        .split('::')
+        .find((id) => id !== senderUser.id);
+      if (otherId) {
+        if (services && services.isEitherBlocked(senderUser.id, otherId)) {
+          const err = new Error('Cannot send message because a block is active between these accounts.');
+          err.status = 403;
+          err.code = 'USER_BLOCKED';
+          throw err;
+        }
+        const peerRow = db.prepare('SELECT * FROM users WHERE id = ?').get(otherId);
+        if (peerRow) {
+          const peerProf = safeJsonParse(peerRow.profile_json, {});
+          if (peerProf.privacy?.dmPermission === 'connections_only') {
+            const friends = getUserFriendIdsSet(peerRow.id);
+            if (!friends.has(senderUser.id)) {
+              const err = new Error(
+                `${peerRow.full_name}'s Teen Privacy Shield allows direct messages from connected friends only.`
+              );
+              err.status = 403;
+              err.code = 'DM_CONNECTIONS_ONLY';
+              throw err;
+            }
+          }
+        }
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(nowIso, threadId);
 
     // Update sender read cursor
     markThreadRead({ userId: senderUser.id, threadId });
@@ -1012,18 +1226,20 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       'INSERT INTO messages (id, thread_id, sender_id, sender_name, text, attachment_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(id, threadId, senderUser.id, senderUser.fullName, cleanText, 'null', nowIso);
 
-    // Notify other participants in the thread
+    // Notify other non-blocked participants in the thread
     const others = db
       .prepare('SELECT user_id FROM chat_participants WHERE thread_id = ? AND user_id != ?')
       .all(threadId, senderUser.id);
     for (const o of others) {
-      createNotification({
-        userId: o.user_id,
-        type: 'message',
-        title: `New message from ${senderUser.fullName}`,
-        detail: cleanText.slice(0, 90),
-        targetRoute: 'chats',
-      });
+      if (!services || !services.isEitherBlocked(senderUser.id, o.user_id)) {
+        createNotification({
+          userId: o.user_id,
+          type: 'message',
+          title: `New message from ${senderUser.fullName}`,
+          detail: cleanText.slice(0, 90),
+          targetRoute: 'chats',
+        });
+      }
     }
 
     return {
@@ -1034,6 +1250,22 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       text: cleanText,
       createdAt: nowIso,
     };
+  }
+
+  function deleteChatMessage({ userId, messageId }) {
+    const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+    if (!msg) {
+      const err = new Error('Message not found.');
+      err.status = 404;
+      throw err;
+    }
+    if (msg.sender_id !== userId) {
+      const err = new Error('You can only unsend your own messages.');
+      err.status = 403;
+      throw err;
+    }
+    db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+    return { deleted: true, messageId };
   }
 
   // ===========================================================================
@@ -1377,22 +1609,13 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     );
     const posts = listFeedPosts({ viewerId: user.id, includeStories: true });
     const { threads, totalUnread } = listThreadsForUser(user.id);
-    const messages = db
-      .prepare('SELECT * FROM messages ORDER BY datetime(created_at) ASC')
-      .all()
-      .map((m) => ({
-        id: m.id,
-        threadId: m.thread_id,
-        senderId: m.sender_id,
-        senderName: m.sender_name,
-        text: m.text,
-        createdAt: m.created_at,
-      }));
+    const messages = listMessagesForUser({ userId: user.id });
     const peers = listPeersForUser(user.id);
     const opportunities = listOpportunities({ userId: user.id });
     const { courses, completedModuleKeys } = listCoursesWithProgress(user.id);
     const notifications = listNotifications(user.id);
     const friendIds = Array.from(getUserFriendIdsSet(user.id));
+    const blockedUsers = services ? services.listMyBlockedUsers(user.id) : [];
     const interactions = db
       .prepare('SELECT target_type, target_id, meta_json FROM user_interactions WHERE user_id = ?')
       .all(user.id);
@@ -1404,6 +1627,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
       messages,
       peers,
       friendIds,
+      blockedUsers,
       opportunities,
       courses,
       completedModuleKeys,
@@ -1424,6 +1648,7 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     addStudentAchievement,
     deleteStudentAchievement,
     syncUserProfileJsonFromTables,
+    getUserFriendIdsSet,
     listPeersForUser,
     toggleFriendship,
     getFullProfileBundle,
@@ -1431,12 +1656,15 @@ export function createPlatformDomainServices({ db, cryptoCtx, engine }) {
     createPostWithRules,
     deletePost,
     addCommentToPost,
+    deleteCommentFromPost,
     recordPostShare,
     recordStoryView,
     openDirectThreadWithPrivacyCheck,
     listThreadsForUser,
+    listMessagesForUser,
     markThreadRead,
     sendChatMessageWithSafety,
+    deleteChatMessage,
     listOpportunities,
     applyToOpportunity,
     createOpportunityBounty,

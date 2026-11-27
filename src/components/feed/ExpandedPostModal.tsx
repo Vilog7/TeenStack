@@ -1,6 +1,6 @@
 import { useState, useEffect, type FormEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Send, Heart, Bookmark, Link2, ExternalLink, AtSign, Clapperboard } from 'lucide-react';
+import { X, Send, Heart, Bookmark, Link2, ExternalLink, AtSign, Clapperboard, Trash2, Flag } from 'lucide-react';
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { SolarisArtwork } from '../ui/SolarisArtwork';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
@@ -8,25 +8,34 @@ import type { FeedPost } from '../../types';
 
 interface ExpandedPostModalProps {
   post: FeedPost | null;
+  currentUserId?: string;
   liked: boolean;
   saved: boolean;
   onClose: () => void;
   onToggleLike: (postId: string) => void;
   onToggleSave: (postId: string) => void;
   onAddComment: (postId: string, text: string) => Promise<void>;
+  onDeletePost?: (postId: string) => Promise<void>;
+  onDeleteComment?: (postId: string, commentId: string) => Promise<void>;
+  onReportPost?: (postId: string) => Promise<void>;
 }
 
 export function ExpandedPostModal({
   post,
+  currentUserId,
   liked,
   saved,
   onClose,
   onToggleLike,
   onToggleSave,
   onAddComment,
+  onDeletePost,
+  onDeleteComment,
+  onReportPost,
 }: ExpandedPostModalProps) {
   const [commentText, setCommentText] = useState('');
   const [sending, setSending] = useState(false);
+  const [reportedNotice, setReportedNotice] = useState(false);
 
   useEffect(() => {
     if (!post) return;
@@ -135,7 +144,7 @@ export function ExpandedPostModal({
             {post.mediaMeta?.videoUrl && (
               <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black">
                 <video
-                  src={post.mediaMeta.videoUrl}
+                  src={assetUrl(post.mediaMeta.videoUrl)}
                   controls
                   playsInline
                   className="max-h-96 w-full object-contain"
@@ -199,28 +208,61 @@ export function ExpandedPostModal({
             </div>
 
             {/* Quick reactions */}
-            <div className="mt-5 flex items-center gap-3 border-y border-white/10 py-3">
-              <button
-                type="button"
-                onClick={() => onToggleLike(post.id)}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
-                  liked ? 'bg-[#743BFF] text-white' : 'bg-white/6 text-[#A5A9BC] hover:text-white'
-                }`}
-              >
-                <Heart className={`h-4 w-4 ${liked ? 'fill-white' : ''}`} />
-                <span>{post.likesCount} Likes</span>
-              </button>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-y border-white/10 py-3">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onToggleLike(post.id)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
+                    liked ? 'bg-[#743BFF] text-white' : 'bg-white/6 text-[#A5A9BC] hover:text-white'
+                  }`}
+                >
+                  <Heart className={`h-4 w-4 ${liked ? 'fill-white' : ''}`} />
+                  <span>{post.likesCount} Likes</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => onToggleSave(post.id)}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
-                  saved ? 'bg-[#27D9D0]/20 text-[#27D9D0]' : 'bg-white/6 text-[#A5A9BC] hover:text-white'
-                }`}
-              >
-                <Bookmark className={`h-4 w-4 ${saved ? 'fill-[#27D9D0]' : ''}`} />
-                <span>{saved ? 'Bookmarked' : 'Bookmark'}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleSave(post.id)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
+                    saved ? 'bg-[#27D9D0]/20 text-[#27D9D0]' : 'bg-white/6 text-[#A5A9BC] hover:text-white'
+                  }`}
+                >
+                  <Bookmark className={`h-4 w-4 ${saved ? 'fill-[#27D9D0]' : ''}`} />
+                  <span>{saved ? 'Bookmarked' : 'Bookmark'}</span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {currentUserId && currentUserId === post.authorId && onDeletePost && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await onDeletePost(post.id);
+                      onClose();
+                    }}
+                    className="inline-flex items-center gap-1 rounded-xl border border-rose-500/35 bg-rose-500/12 px-2.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/25"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete</span>
+                  </button>
+                )}
+
+                {currentUserId && currentUserId !== post.authorId && onReportPost && (
+                  <button
+                    type="button"
+                    disabled={reportedNotice}
+                    onClick={async () => {
+                      await onReportPost(post.id);
+                      setReportedNotice(true);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-[#A5A9BC] hover:text-white disabled:text-[#27D9D0]"
+                  >
+                    <Flag className="h-3.5 w-3.5" />
+                    <span>{reportedNotice ? 'Reported to Safety Team' : 'Report'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Peer Comments */}
@@ -235,21 +277,39 @@ export function ExpandedPostModal({
                 </p>
               ) : (
                 <div className="space-y-2.5">
-                  {post.comments.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-start gap-2.5 rounded-2xl border border-white/8 bg-[#080910]/65 p-3"
-                    >
-                      <StudentAvatar presetOrUrl={c.avatar} name={c.author} size="xs" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-semibold text-white">{c.author}</span>
-                          <span className="text-[10px] text-[#A5A9BC]">{c.time}</span>
+                  {post.comments.map((c) => {
+                    const canDeleteComment =
+                      Boolean(onDeleteComment) &&
+                      Boolean(currentUserId) &&
+                      (c.authorId === currentUserId || post.authorId === currentUserId);
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex items-start gap-2.5 rounded-2xl border border-white/8 bg-[#080910]/65 p-3"
+                      >
+                        <StudentAvatar presetOrUrl={c.avatar} name={c.author} size="xs" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-white">{c.author}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-[#A5A9BC]">{c.time}</span>
+                              {canDeleteComment && (
+                                <button
+                                  type="button"
+                                  aria-label="Delete comment"
+                                  onClick={() => onDeleteComment!(post.id, c.id)}
+                                  className="text-[#A5A9BC] hover:text-rose-400"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <p className="mt-0.5 text-xs text-[#A5A9BC]">{c.text}</p>
                         </div>
-                        <p className="mt-0.5 text-xs text-[#A5A9BC]">{c.text}</p>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 

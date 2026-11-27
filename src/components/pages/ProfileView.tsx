@@ -25,10 +25,15 @@ import {
   Link2,
   Briefcase,
   AtSign,
+  Ban,
+  Flag,
+  Download,
+  KeyRound,
 } from 'lucide-react';
 import { StudentAvatar } from '../ui/StudentAvatar';
 import { PEER_STUDENTS, CHAT_THREADS } from '../../data/catalog';
 import { SPRINGS, assetUrl } from '../../lib/tokens';
+import { api } from '../../lib/api';
 import type { FeedPost, NavSection, PeerStudent, UserAccount } from '../../types';
 
 type ProfileTabId =
@@ -64,6 +69,7 @@ interface ProfileViewProps {
     tag: string;
   }) => Promise<void>;
   onAddAchievement?: (title: string) => Promise<void>;
+  onBlockPeer?: (peerId: string) => Promise<void>;
   onOpenOnboardingWizard: () => void;
   onLogout?: () => void;
 }
@@ -104,10 +110,16 @@ export function ProfileView({
   onSaveProfilePatch,
   onAddProject,
   onAddAchievement,
+  onBlockPeer,
   onOpenOnboardingWizard,
   onLogout,
 }: ProfileViewProps) {
   const [activeTab, setActiveTab] = useState<ProfileTabId>('posts');
+  const [safetyToast, setSafetyToast] = useState('');
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [accountNotice, setAccountNotice] = useState('');
   const [viewingStory, setViewingStory] = useState<{
     title: string;
     caption: string;
@@ -658,6 +670,36 @@ export function ProfileView({
                 <MessageSquare className="h-3.5 w-3.5 text-[#27D9D0]" />
                 <span>Message</span>
               </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await api.reportContent({
+                    targetType: 'user',
+                    targetId: inspectingPeer.id,
+                    reasonCategory: 'Inappropriate Conduct',
+                  });
+                  setSafetyToast(`Submitted safety report for ${inspectingPeer.handle}.`);
+                }}
+                className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/6 px-3.5 py-2 text-xs font-medium text-[#A5A9BC] hover:text-white"
+              >
+                <Flag className="h-3.5 w-3.5" />
+                <span>Report</span>
+              </button>
+
+              {onBlockPeer && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onBlockPeer(inspectingPeer.id);
+                    onClearInspectingPeer();
+                  }}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20"
+                >
+                  <Ban className="h-3.5 w-3.5" />
+                  <span>Block</span>
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -702,6 +744,10 @@ export function ProfileView({
             </>
           )}
         </div>
+
+        {safetyToast && (
+          <p className="mt-2 text-xs font-medium text-[#27D9D0]">{safetyToast}</p>
+        )}
 
         {/* =====================================================================
             2. INSTAGRAM STORY HIGHLIGHTS ROW ON PROFILE
@@ -1628,6 +1674,84 @@ export function ProfileView({
                       <option value="verified_students">Verified Students</option>
                     </select>
                   </div>
+
+                  {/* DPDP Data Portability & Password Security Controls */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-2.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const data = await api.exportMyData();
+                        const blob = new Blob([JSON.stringify(data, null, 2)], {
+                          type: 'application/json',
+                        });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `teenstack-data-${user.username}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setAccountNotice('DPDP personal data export downloaded.');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/12 bg-[#111426] px-3 py-1.5 text-[11px] font-semibold text-[#27D9D0] hover:border-[#27D9D0]"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      <span>Export My Data (JSON)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPwdOpen((v) => !v);
+                        setAccountNotice('');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/12 bg-[#111426] px-3 py-1.5 text-[11px] font-semibold text-white hover:border-[#743BFF]"
+                    >
+                      <KeyRound className="h-3.5 w-3.5 text-[#743BFF]" />
+                      <span>Change Password</span>
+                    </button>
+                  </div>
+
+                  {pwdOpen && (
+                    <div className="space-y-2 rounded-xl border border-white/10 bg-[#111426]/80 p-2.5">
+                      <input
+                        type="password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder="Current password"
+                        className="w-full rounded-lg border border-white/12 bg-[#080910] px-3 py-1.5 text-xs text-white"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="New password (min 8 chars)"
+                          className="flex-1 rounded-lg border border-white/12 bg-[#080910] px-3 py-1.5 text-xs text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await api.changePassword({ currentPassword, newPassword });
+                              setCurrentPassword('');
+                              setNewPassword('');
+                              setPwdOpen(false);
+                              setAccountNotice('Password updated & other sessions revoked.');
+                            } catch (err: any) {
+                              setAccountNotice(err.message || 'Could not update password.');
+                            }
+                          }}
+                          className="rounded-lg bg-[#258BFF] px-3 py-1.5 text-xs font-semibold text-white"
+                        >
+                          Update
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {accountNotice && (
+                    <p className="text-[11px] font-medium text-[#27D9D0]">{accountNotice}</p>
+                  )}
                 </div>
 
                 <div className="flex justify-end gap-2 pt-2">

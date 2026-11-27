@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const MIGRATION_001_PATH = path.join(__dirname, 'migrations', '001_signzy_verification_schema.sql');
 const MIGRATION_002_PATH = path.join(__dirname, 'migrations', '002_full_platform_domains.sql');
+const MIGRATION_003_PATH = path.join(__dirname, 'migrations', '003_media_safety_and_lifecycle.sql');
 
 function ensureColumn(db, tableName, columnName, columnDef) {
   const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
@@ -111,11 +112,16 @@ export function initializeDatabase({ dbPath, cryptoCtx, seedDemo = true }) {
   `);
 
   ensureColumn(db, 'sessions', 'role', "TEXT NOT NULL DEFAULT 'student'");
+  ensureColumn(db, 'sessions', 'created_at', "TEXT DEFAULT ''");
+  ensureColumn(db, 'sessions', 'user_agent', "TEXT DEFAULT ''");
   ensureColumn(db, 'posts', 'views_count', 'INTEGER DEFAULT 0');
   ensureColumn(db, 'posts', 'expires_at', 'TEXT');
 
   // Run Migration 002: Full Platform Relational Domains
   db.exec(fs.readFileSync(MIGRATION_002_PATH, 'utf8'));
+
+  // Run Migration 003: Media Assets, User Blocks & Safety Moderation
+  db.exec(fs.readFileSync(MIGRATION_003_PATH, 'utf8'));
 
   // Upgrade any pre-existing legacy rows so PII is encrypted at rest and lookup hashes are populated
   const allUsers = db.prepare('SELECT * FROM users').all();
