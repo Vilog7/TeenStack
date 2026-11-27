@@ -20,6 +20,7 @@ import {
 } from './verification_engine.mjs';
 import { createBackendCompletionServices } from './backend_services.mjs';
 import { createPlatformDomainServices } from './platform_domains.mjs';
+import { createPostgresDatabase } from './postgres_db.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,7 +87,9 @@ async function readJsonBody(req, maxBytes = 6_000_000) {
 export function createTeenStackServer({
   dbPath = path.join(__dirname, 'teenstack.sqlite'),
   uploadsDir = path.join(path.dirname(dbPath), 'uploads'),
+  pgDumpPath = path.join(path.dirname(dbPath), 'teenstack_pgdata.tar.gz'),
   env = process.env,
+  enablePostgres = env.NODE_ENV !== 'test' || Boolean(env.DATABASE_URL) || env.ENABLE_POSTGRES_TEST === 'true',
   distPath = defaultDistPath,
   seedDemo = true,
 } = {}) {
@@ -97,18 +100,50 @@ export function createTeenStackServer({
   const services = createBackendCompletionServices({ db, cryptoCtx, engine, uploadsDir });
   const domains = createPlatformDomainServices({ db, cryptoCtx, engine, services });
   const limiter = new RateLimiter();
+  const isTestEnv = env.NODE_ENV === 'test';
+
+  // Initialize complete 38-table PostgreSQL engine & initial relational sync
+  const pgPromise = enablePostgres
+    ? createPostgresDatabase({
+        env,
+        pgDumpPath: isTestEnv && !env.FORCE_PG_DUMP ? null : pgDumpPath,
+      }).then(async (pgInst) => {
+        await pgInst.syncFromSqlite(db, { persist: !isTestEnv });
+        return pgInst;
+      })
+    : Promise.resolve(null);
+
+  async function syncPostgres({ persist = !isTestEnv } = {}) {
+    const pgInst = await pgPromise;
+    if (pgInst) {
+      await pgInst.syncFromSqlite(db, { persist });
+    }
+    return pgInst;
+  }
 
   // Automated background sweep for expired sessions, 24h stories & DPDP hard-erasure requests
   const maintenanceTimer = setInterval(() => {
     try {
       services.runMaintenanceSweep();
+      syncPostgres({ persist: !isTestEnv }).catch(() => {});
     } catch {
       // ignore transient maintenance sweep error
     }
   }, 5 * 60 * 1000);
   maintenanceTimer.unref();
 
-  function sendJson(res, status, data, extraHeaders = {}) {
+  function sendJson(res, status, data, extraHeaders = {}, reqMethod = 'GET') {
+    if (enablePostgres && status < 400 && reqMethod !== 'GET' && reqMethod !== 'HEAD') {
+      return syncPostgres({ persist: !isTestEnv }).then(() => {
+        res.writeHead(status, {
+          ...SECURITY_HEADERS,
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+          ...extraHeaders,
+        });
+        res.end(JSON.stringify(data));
+      });
+    }
     res.writeHead(status, {
       ...SECURITY_HEADERS,
       'Content-Type': 'application/json; charset=utf-8',
@@ -268,6 +303,8 @@ export function createTeenStackServer({
       const urlObj = new URL(req.url || '/', originBaseUrl);
       const pathname = urlObj.pathname;
       const method = req.method || 'GET';
+      const replyJson = (status, data, extraHeaders = {}) =>
+        sendJson(res, status, data, extraHeaders, method);
 
       // Enforce HTTPS in production behind reverse proxy
       if (cryptoCtx.isProd && proto !== 'https' && pathname.startsWith('/api/')) {
@@ -275,15 +312,43 @@ export function createTeenStackServer({
       }
 
       if (pathname === '/api/health' && method === 'GET') {
+        const pgInst = await pgPromise;
         return sendJson(res, 200, {
           ok: true,
-          engine: 'node:sqlite',
+          engine: pgInst ? 'postgresql' : 'node:sqlite',
+          postgres: pgInst
+            ? {
+                active: true,
+                mode: pgInst.mode,
+                version: pgInst.version.split(' on ')[0],
+                totalTables: 38,
+              }
+            : { active: false },
           verificationProvider: {
             mode: signzyService.mode,
             productionActivationEnabled: signzyService.productionActivationEnabled,
           },
           timestamp: new Date().toISOString(),
         });
+      }
+
+      if (pathname === '/api/admin/database/postgres-overview' && method === 'GET') {
+        const auth = getAuthUser(req);
+        const adminKeyHeader = req.headers['x-compliance-admin-key'] || '';
+        const expectedAdminKey = env.COMPLIANCE_ADMIN_KEY || '';
+        const isAdminRole = auth && auth.sessionRole === 'compliance_admin';
+        const isKeyAuthed = expectedAdminKey && adminKeyHeader === expectedAdminKey;
+
+        if (!isAdminRole && !isKeyAuthed) {
+          return sendJson(res, 403, { error: 'Forbidden: compliance_admin role required.' });
+        }
+
+        const pgInst = await syncPostgres({ persist: false });
+        if (!pgInst) {
+          return sendJson(res, 503, { error: 'PostgreSQL engine is disabled.' });
+        }
+        const overview = await pgInst.getDatabaseOverview();
+        return sendJson(res, 200, overview);
       }
 
       // =========================================================================
@@ -1634,7 +1699,40 @@ export function createTeenStackServer({
     }
   });
 
-  return { server, db, cryptoCtx, signzyService, engine, services, domains };
+  // Ensure every mutating API response syncs to PostgreSQL automatically via res.writeHead hook
+  const origEmit = server.emit.bind(server);
+  server.on('request', (req, res) => {
+    const reqMethod = req.method || 'GET';
+    if (!enablePostgres || reqMethod === 'GET' || reqMethod === 'HEAD') return;
+    const origEnd = res.end.bind(res);
+    res.end = function patchedEnd(...args) {
+      if (res.statusCode && res.statusCode < 400) {
+        syncPostgres({ persist: !isTestEnv })
+          .catch(() => {})
+          .finally(() => origEnd(...args));
+        return res;
+      }
+      return origEnd(...args);
+    };
+  });
+  void origEmit;
+
+  server.on('close', () => {
+    clearInterval(maintenanceTimer);
+    pgPromise.then((pgInst) => pgInst && pgInst.close()).catch(() => {});
+  });
+
+  return {
+    server,
+    db,
+    cryptoCtx,
+    signzyService,
+    engine,
+    services,
+    domains,
+    getPostgres: () => pgPromise,
+    syncPostgres,
+  };
 }
 
 // Start server automatically when invoked directly via `node server/index.mjs`

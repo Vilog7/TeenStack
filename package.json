@@ -7,13 +7,16 @@
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite --port 5173",
     "dev:api": "node --no-warnings server/index.mjs",
+    "db:migrate": "node --no-warnings database/postgresql/migrate.mjs",
     "build": "tsc -b && vite build",
     "start": "node --no-warnings server/index.mjs"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.6.0",
     "express": "^5.1.0",
     "lucide-react": "^0.511.0",
     "motion": "^12.12.1",
+    "pg": "^8.20.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
