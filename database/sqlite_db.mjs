@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hashPassword, normalizeEmail, normalizeMobile } from './security.mjs';
+import { hashPassword, normalizeEmail, normalizeMobile } from '../backend/security.mjs';
 import {
   SEED_PEER_USERS,
   SEED_OPPORTUNITIES,
@@ -14,9 +14,9 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const MIGRATION_001_PATH = path.join(__dirname, 'migrations', '001_signzy_verification_schema.sql');
-const MIGRATION_002_PATH = path.join(__dirname, 'migrations', '002_full_platform_domains.sql');
-const MIGRATION_003_PATH = path.join(__dirname, 'migrations', '003_media_safety_and_lifecycle.sql');
+const MIGRATION_001_PATH = path.join(__dirname, 'sqlite', 'migrations', '001_signzy_verification_schema.sql');
+const MIGRATION_002_PATH = path.join(__dirname, 'sqlite', 'migrations', '002_full_platform_domains.sql');
+const MIGRATION_003_PATH = path.join(__dirname, 'sqlite', 'migrations', '003_media_safety_and_lifecycle.sql');
 
 function ensureColumn(db, tableName, columnName, columnDef) {
   const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
@@ -26,6 +26,9 @@ function ensureColumn(db, tableName, columnName, columnDef) {
 }
 
 export function initializeDatabase({ dbPath, cryptoCtx, seedDemo = true }) {
+  if (dbPath && dbPath !== ':memory:') {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  }
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = DELETE;');
   db.exec('PRAGMA foreign_keys = ON;');

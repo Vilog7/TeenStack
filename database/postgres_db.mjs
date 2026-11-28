@@ -7,20 +7,8 @@ import { PGlite } from '@electric-sql/pglite';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SCHEMA_001_PATH = path.resolve(
-  __dirname,
-  '..',
-  'database',
-  'postgresql',
-  '001_teenstack_complete_schema.sql'
-);
-const TRIGGERS_002_PATH = path.resolve(
-  __dirname,
-  '..',
-  'database',
-  'postgresql',
-  '002_triggers_and_views.sql'
-);
+const SCHEMA_001_PATH = path.join(__dirname, 'postgresql', '001_teenstack_complete_schema.sql');
+const TRIGGERS_002_PATH = path.join(__dirname, 'postgresql', '002_triggers_and_views.sql');
 
 function safeJsonParse(raw, fallback) {
   try {

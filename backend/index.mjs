@@ -12,7 +12,7 @@ import {
   SECURITY_HEADERS,
   verifyPassword,
 } from './security.mjs';
-import { initializeDatabase } from './db.mjs';
+import { initializeDatabase } from '../database/sqlite_db.mjs';
 import { createSignzyAgeVerificationService } from './signzy_age_verification.mjs';
 import {
   createVerificationEngine,
@@ -20,11 +20,14 @@ import {
 } from './verification_engine.mjs';
 import { createBackendCompletionServices } from './backend_services.mjs';
 import { createPlatformDomainServices } from './platform_domains.mjs';
-import { createPostgresDatabase } from './postgres_db.mjs';
+import { createPostgresDatabase } from '../database/postgres_db.mjs';
+import { DEFAULT_UPLOADS_DIR } from '../storage/media_storage.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const defaultDistPath = path.resolve(__dirname, '..', 'dist');
+const defaultDataDir = path.resolve(__dirname, '..', 'database', 'data');
+const defaultDbPath = path.join(defaultDataDir, 'teenstack.sqlite');
+const defaultDistPath = path.resolve(__dirname, '..', 'frontend', 'dist');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -85,8 +88,10 @@ async function readJsonBody(req, maxBytes = 6_000_000) {
 }
 
 export function createTeenStackServer({
-  dbPath = path.join(__dirname, 'teenstack.sqlite'),
-  uploadsDir = path.join(path.dirname(dbPath), 'uploads'),
+  dbPath = defaultDbPath,
+  uploadsDir = dbPath === defaultDbPath
+    ? DEFAULT_UPLOADS_DIR
+    : path.join(path.dirname(dbPath), 'uploads'),
   pgDumpPath = path.join(path.dirname(dbPath), 'teenstack_pgdata.tar.gz'),
   env = process.env,
   enablePostgres = env.NODE_ENV !== 'test' || Boolean(env.DATABASE_URL) || env.ENABLE_POSTGRES_TEST === 'true',

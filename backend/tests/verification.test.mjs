@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createHmac } from 'node:crypto';
-import { createTeenStackServer } from './index.mjs';
+import { createTeenStackServer } from '../index.mjs';
 
 async function startEphemeralServer(customEnv = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teenstack-verif-test-'));

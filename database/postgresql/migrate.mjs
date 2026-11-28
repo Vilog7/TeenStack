@@ -1,15 +1,15 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCryptoContext } from '../../server/security.mjs';
-import { initializeDatabase } from '../../server/db.mjs';
-import { createPostgresDatabase } from '../../server/postgres_db.mjs';
+import { createCryptoContext } from '../../backend/security.mjs';
+import { initializeDatabase } from '../sqlite_db.mjs';
+import { createPostgresDatabase } from '../postgres_db.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const serverDir = path.resolve(__dirname, '..', '..', 'server');
-const sqlitePath = path.join(serverDir, 'teenstack.sqlite');
-const pgDumpPath = path.join(serverDir, 'teenstack_pgdata.tar.gz');
+const dataDir = path.resolve(__dirname, '..', 'data');
+const sqlitePath = path.join(dataDir, 'teenstack.sqlite');
+const pgDumpPath = path.join(dataDir, 'teenstack_pgdata.tar.gz');
 
 async function main() {
   const cryptoCtx = createCryptoContext(process.env);

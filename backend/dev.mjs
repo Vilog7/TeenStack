@@ -5,16 +5,20 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
-const apiProc = spawn(process.execPath, ['--no-warnings', 'server/index.mjs'], {
+const apiProc = spawn(process.execPath, ['--no-warnings', 'backend/index.mjs'], {
   cwd: root,
   stdio: 'inherit',
 });
 
 const viteBin = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js');
-const webProc = spawn(process.execPath, [viteBin, '--port', '5173'], {
-  cwd: root,
-  stdio: 'inherit',
-});
+const webProc = spawn(
+  process.execPath,
+  [viteBin, '--config', 'frontend/vite.config.ts', '--port', '5173'],
+  {
+    cwd: root,
+    stdio: 'inherit',
+  }
+);
 
 const shutdown = () => {
   apiProc.kill();

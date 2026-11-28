@@ -13,8 +13,8 @@ services:
       - '5432:5432'
     volumes:
       - teenstack_pgdata:/var/lib/postgresql/data
-      - ./database/postgresql/001_teenstack_complete_schema.sql:/docker-entrypoint-initdb.d/001_teenstack_complete_schema.sql:ro
-      - ./database/postgresql/002_triggers_and_views.sql:/docker-entrypoint-initdb.d/002_triggers_and_views.sql:ro
+      - ./postgresql/001_teenstack_complete_schema.sql:/docker-entrypoint-initdb.d/001_teenstack_complete_schema.sql:ro
+      - ./postgresql/002_triggers_and_views.sql:/docker-entrypoint-initdb.d/002_triggers_and_views.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER:-teenstack} -d $${POSTGRES_DB:-teenstack}']
       interval: 5s

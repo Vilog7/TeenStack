@@ -4,12 +4,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
-    "dev:web": "vite --port 5173",
-    "dev:api": "node --no-warnings server/index.mjs",
+    "dev": "node backend/dev.mjs",
+    "dev:web": "vite --config frontend/vite.config.ts --port 5173",
+    "dev:api": "node --no-warnings backend/index.mjs",
     "db:migrate": "node --no-warnings database/postgresql/migrate.mjs",
-    "build": "tsc -b && vite build",
-    "start": "node --no-warnings server/index.mjs"
+    "test": "node --no-warnings --test backend/tests/postgres_database.test.mjs backend/tests/verification.test.mjs backend/tests/platform_domains.test.mjs backend/tests/backend_completion.test.mjs",
+    "build": "tsc -b frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
+    "start": "node --no-warnings backend/index.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.6.0",

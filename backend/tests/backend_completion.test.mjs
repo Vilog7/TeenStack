@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { createTeenStackServer } from './index.mjs';
+import { createTeenStackServer } from '../index.mjs';
 
 // Minimal valid 1x1 transparent PNG (67 bytes, valid 89 50 4E 47 0D 0A 1A 0A header)
 const SAMPLE_PNG_BASE64 =
